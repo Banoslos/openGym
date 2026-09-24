@@ -1,19 +1,31 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore.js'
 import { useUI } from '../store/useUI.js'
 import { exOr } from '../lib/exercises.js'
-import { effectiveRoutine, lastEntryFor, bestWeightFor, buildSets, setsDoneActive, supersetUnits, unitOf, setLabel, modeOf, isBw, isPerSide, sideReps, repStep, EFFORT, effortOf, stepEffort, capEffort } from '../lib/history.js'
+import { effectiveRoutine, lastEntryFor, bestWeightFor, buildSets, setsDoneActive, supersetUnits, unitOf, setLabel, modeOf, isBw, isPerSide, sideReps, repStep, EFFORT, effortOf, stepEffort, capEffort, restSecFor } from '../lib/history.js'
 import { fmtNum, fmtDate, todayISO, exCount, DAYN } from '../lib/format.js'
 import { beep, vibrate } from '../lib/sound.js'
 import { t } from '../lib/i18n.js'
 import { api } from '../lib/api.js'
 import Media from '../components/Media.jsx'
 import { startFlow, exercisePicker, exConfigSheet, exerciseDetailSheet, topWeightSheet, finishWorkout, workoutCompleteSheet, confirmSheet } from '../sheets.jsx'
+import { generatorSheet } from '../Generator.jsx'
 import Icon from '../components/Icon.jsx'
-import { Button, Check, NumberField } from '../components/ui.jsx'
+import { Button, Check, NumberField, Stepper, TextArea } from '../components/ui.jsx'
 import { nextPrescription, applyPrescription } from '../lib/progression.js'
 import { glyphOf } from '../lib/glyphs.js'
+
+/* ---------- compact inline popover (issue: rest/setup controls must be visible and editable
+   without leaving the screen or interrupting the set — no modal, no navigation). Anchored to a
+   `position:relative` parent by the caller; a transparent full-screen backdrop closes it on any
+   outside tap without blocking the rest of the page from being read while it's open. ---------- */
+function InlinePopover({ onClose, align, children }) {
+  return <>
+    <div className="pop-backdrop" onClick={onClose} />
+    <div className={'pop-card' + (align === 'right' ? ' right' : '')} onClick={e => e.stopPropagation()}>{children}</div>
+  </>
+}
 
 /* ---------- start chooser (no active workout) ---------- */
 function StartChooser() {
@@ -38,8 +50,56 @@ function StartChooser() {
         <div className="grow"><div className="tt">{r.name}</div><div className="ss">{exCount(r.ex.length)}</div></div>
         <span className="tag acc">{t('Start')}</span></div>)}</div></>}
     <div style={{ height: 14 }} />
+    <Button icon="sparkles" onClick={generatorSheet}>{t('Generate a workout for today')}</Button>
+    <div style={{ height: 10 }} />
     <Button icon="shuffle" onClick={() => startFlow(null)}>{t('Freestyle workout (pick as you go)')}</Button>
     {!S.routines.length && <><div style={{ height: 10 }} /><Button variant="primary" onClick={() => nav('/plan')}>{t('Build a plan first')}</Button></>}
+  </div>
+}
+
+/* ---------- session overview: every exercise at a glance, tap one to jump to it ---------- */
+const OVERVIEW_KEY = 'og.wOverview'
+function readOverviewPref() {
+  try { return localStorage.getItem(OVERVIEW_KEY) !== '0' } catch { return true }
+}
+function SessionOverview({ entries, units, cur, onJump }) {
+  const [open, setOpen] = useState(readOverviewPref)
+  const toggleOpen = () => setOpen(v => {
+    try { localStorage.setItem(OVERVIEW_KEY, v ? '0' : '1') } catch { /* private mode */ }
+    return !v
+  })
+  const unitIdx = units.findIndex(u => u.includes(cur))
+  const listRef = useRef(null)
+  useEffect(() => {
+    const list = listRef.current, row = list && list.querySelector('.wov-u.cur')
+    if (row) list.scrollTop = row.offsetTop - list.clientHeight / 2 + row.clientHeight / 2
+  }, [open, unitIdx])
+  const unitsDone = units.filter(u => u.every(i => entries[i].sets.length && entries[i].sets.every(s => s.done))).length
+  return <div className="wov">
+    <button className="wov-hd" onClick={toggleOpen} aria-expanded={open}>
+      <Icon name="list" />
+      <span className="grow">{t('Exercise {0} / {1}', unitIdx + 1, units.length)}<span className="dim"> · {t('{0} done', unitsDone + '/' + units.length)}</span></span>
+      <Icon name={open ? 'chevronUp' : 'chevronDown'} />
+    </button>
+    {open && <div className="wov-list" ref={listRef}>
+      {units.map((u, k) => {
+        const isCur = k === unitIdx
+        return <button key={u[0]} className={'wov-u' + (isCur ? ' cur' : '')} onClick={() => onJump(u[0])}>
+          {u.map((i, j) => {
+            const e = entries[i]
+            const n = e.sets.filter(s => s.done).length
+            const allDone = e.sets.length > 0 && n === e.sets.length
+            const next = e.sets.find(s => !s.done) || e.sets[e.sets.length - 1]
+            const cfg = { ...(e.target || {}), id: e.id }
+            return <span key={i} className={'wov-r' + (allDone ? ' done' : '')}>
+              <span className="wov-n">{allDone ? <Icon name="check" /> : j === 0 ? k + 1 : <Icon name="link" />}</span>
+              <span className="grow wov-t capitalize">{exOr(e.id).n}</span>
+              <span className="wov-s">{n}/{e.sets.length}{next ? ' · ' + setLabel(e.id, next, cfg).replace(/^0×/, '× ') : ''}</span>
+            </span>
+          })}
+        </button>
+      })}
+    </div>}
   </div>
 }
 
@@ -54,9 +114,12 @@ function Elapsed({ start }) {
 }
 
 /* ---------- one exercise block (reps: weight×reps · time: a held duration · cardio: duration+speed) ---------- */
-function ExerciseBlock({ entryIdx, compact, onToggle, onField, onAddSet, onRemoveSet, onStartTimed }) {
+function ExerciseBlock({ entryIdx, compact, onToggle, onField, onAddSet, onRemoveSet, onStartTimed, onTargetField }) {
   const S = useStore(s => s.S)
   const working = useUI(s => s.work)
+  // Which compact popover is open, if any: 'rest' | 'notes' | 'set:<i>' | null. Local, not
+  // persisted — it's just which control is expanded right now.
+  const [popover, setPopover] = useState(null)
   const entry = S.active.entries[entryIdx]
   const ex = exOr(entry.id)
   const mode = modeOf({ ...(entry.target || {}), id: entry.id })
@@ -123,6 +186,36 @@ function ExerciseBlock({ entryIdx, compact, onToggle, onField, onAddSet, onRemov
       {ex.eq && <span className="tag">{t(ex.eq)}</span>}
       {best > 0 && <span className="tag nocap">{t('Best:')} {fmtNum(best)} {S.unit}</span>}
     </div>
+    {/* Rest override and setup notes (issue: recovery time and machine setup vary per exercise,
+        not just globally) — both editable right here, mid-session, with no navigation and
+        without touching the set in progress. */}
+    <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+      {!cardio && <span style={{ position: 'relative' }}>
+        <button className="tag pop-trig" onClick={() => setPopover(p => p === 'rest' ? null : 'rest')}>
+          <Icon name="clock" />{t('Rest {0}s', entry.target?.restSec || S.restSec)}
+        </button>
+        {popover === 'rest' && <InlinePopover onClose={() => setPopover(null)}>
+          <div className="pop-title">{t('Rest after each set')}</div>
+          <Stepper value={entry.target?.restSec || 0} step={5} decimal={false}
+            onChange={v => onTargetField('restSec', v)} />
+          <div className="small dim" style={{ marginTop: 8 }}>
+            {entry.target?.restSec > 0
+              ? t('{0}s for this exercise. Set to 0 to follow the app default.', entry.target.restSec)
+              : t('Following the app default ({0}s). A set can still be timed on its own — tap its number.', S.restSec)}
+          </div>
+        </InlinePopover>}
+      </span>}
+      <span style={{ position: 'relative' }}>
+        <button className={'tag pop-trig' + (entry.target?.notes ? ' acc' : '')} onClick={() => setPopover(p => p === 'notes' ? null : 'notes')}>
+          <Icon name="clipboard" />{entry.target?.notes ? t('Setup: {0}', entry.target.notes) : t('Add setup note')}
+        </button>
+        {popover === 'notes' && <InlinePopover onClose={() => setPopover(null)} align="right">
+          <div className="pop-title">{t('Setup notes')}</div>
+          <TextArea rows={3} autoFocus placeholder={t('Bench incline, machine pin, seat height…')}
+            defaultValue={entry.target?.notes || ''} onBlur={e => onTargetField('notes', e.target.value.trim())} />
+        </InlinePopover>}
+      </span>
+    </div>
     {last && <div className="small dim" style={{ marginBottom: 4 }}>{t('Last time')} ({fmtDate(last.d)}): {last.sets.map(s => setLabel(entry.id, s, last.target)).join(', ')}</div>}
     {plan && plan.why && plan.kind !== 'off' && <div className={'progline' + (plan.kind === 'deload' ? ' warn' : '')}>
       <Icon name={plan.kind === 'up' ? 'arrowUp' : plan.kind === 'deload' ? 'arrowDown' : 'lightbulb'} />
@@ -132,7 +225,20 @@ function ExerciseBlock({ entryIdx, compact, onToggle, onField, onAddSet, onRemov
       {/* the header carries the same eff3 sizing as the rows, or the labels drift off their columns */}
       <div className={'sethead' + (col3 ? ' eff3' : '')}><span className="n-sp" /><span className="w-sp">{col1.hd}</span>{col2 && <span className="r-sp">{col2.hd}</span>}{col3 && <span className="eff-sp">{col3.hd}</span>}{timed && <span className="ck-sp" />}<span className="ck-sp" /></div>
       {entry.sets.map((s, i) => <div key={i} className={'setrow' + (s.done ? ' done' : '') + (col3 ? ' eff3' : '')}>
-        <div className="n">{i + 1}</div>
+        {/* Tap the set number to override rest for just this set — the value the completed-set
+            timer actually uses (see restSecFor): this set's own value first, then the
+            exercise's, then the app default. A filled dot marks a set that has one. */}
+        <button className={'n' + (s.restSec > 0 ? ' has-rest' : '')} aria-label={t('Rest for this set')}
+          onClick={() => setPopover(p => p === 'set:' + i ? null : 'set:' + i)}>{i + 1}</button>
+        {popover === 'set:' + i && <InlinePopover onClose={() => setPopover(null)}>
+          <div className="pop-title">{t('Rest after set {0}', i + 1)}</div>
+          <Stepper value={s.restSec || 0} step={5} decimal={false} onChange={v => onField(i, 'restSec', v || null)} />
+          <div className="small dim" style={{ marginTop: 8 }}>
+            {s.restSec > 0
+              ? t('{0}s just for this set.', s.restSec)
+              : t('Following the exercise ({0}s).', entry.target?.restSec || S.restSec)}
+          </div>
+        </InlinePopover>}
         {cell(s, i, col1, 'w')}
         {col2 && cell(s, i, col2, 'r')}
         {col3 && cell(s, i, col3, 'eff')}
@@ -173,6 +279,13 @@ function ActiveWorkout() {
   const setField = (idx, i, field, v) => mutEntry(idx, e => {
     if (v == null) delete e.sets[i][field]; else e.sets[i][field] = v
   })
+  // Exercise-level override (rest, setup notes), edited live during the session. Clearing it
+  // (0 seconds, empty text) drops the key rather than storing an empty one, same rule as a set
+  // field — falls straight back through restSecFor / an absent badge.
+  const setTarget = (idx, field, v) => mutEntry(idx, e => {
+    e.target = e.target || {}
+    if (v == null || v === '' || v === 0) delete e.target[field]; else e.target[field] = v
+  })
   const modeAt = idx => modeOf({ ...(A.entries[idx].target || {}), id: A.entries[idx].id })
   const addSet = idx => mutEntry(idx, e => {
     const l = e.sets[e.sets.length - 1]
@@ -206,7 +319,7 @@ function ActiveWorkout() {
         beep(S.sound, 1040, 0.12); vibrate(30)
         const isLastExInUnit = idx === unit[unit.length - 1]
         const unitDone = unit.every(ui => (ui === idx ? e : A.entries[ui]).sets.every(x => x.done))
-        if (isLastExInUnit && !unitDone) startRest(S.restSec)
+        if (isLastExInUnit && !unitDone) startRest(restSecFor(S, e.target, e.sets[i]))
         else if (unitDone) stopRest()
         if (unitDone && isLastUnit) workoutDone = true      // last exercise's last set → done
         // Only loaded reps training has a "working weight" worth confirming — a bodyweight
@@ -260,18 +373,18 @@ function ActiveWorkout() {
     <div className="wprog"><i style={{ width: (total ? done / total * 100 : 0) + '%' }} /></div>
 
     {A.entries.length ? <>
-      <div className="muted small" style={{ marginBottom: 6 }}>{isSuperset ? t('Superset {0} / {1}', unitIdx + 1, units.length) : t('Exercise {0} / {1}', unitIdx + 1, units.length)}</div>
+      <SessionOverview entries={A.entries} units={units} cur={cur} onJump={i => update(s => { s.active.cur = i })} />
       {isSuperset ? (
         <div className="ss-card">
           <div className="ss-hd"><Icon name="link" />{t('Superset · do these back-to-back, rest after both')}</div>
           {unit.map((idx, k) => <div key={idx} className="ss-ex">
             {k > 0 && <div className="ss-amp">+</div>}
             <ExerciseBlock entryIdx={idx} compact
-              onToggle={i => toggle(idx, i)} onField={(i, f, v) => setField(idx, i, f, v)} onAddSet={() => addSet(idx)} onRemoveSet={() => removeSet(idx)} onStartTimed={i => startTimed(idx, i)} />
+              onToggle={i => toggle(idx, i)} onField={(i, f, v) => setField(idx, i, f, v)} onAddSet={() => addSet(idx)} onRemoveSet={() => removeSet(idx)} onStartTimed={i => startTimed(idx, i)} onTargetField={(f, v) => setTarget(idx, f, v)} />
           </div>)}
         </div>
       ) : (
-        <ExerciseBlock entryIdx={cur} onToggle={i => toggle(cur, i)} onField={(i, f, v) => setField(cur, i, f, v)} onAddSet={() => addSet(cur)} onRemoveSet={() => removeSet(cur)} onStartTimed={i => startTimed(cur, i)} />
+        <ExerciseBlock entryIdx={cur} onToggle={i => toggle(cur, i)} onField={(i, f, v) => setField(cur, i, f, v)} onAddSet={() => addSet(cur)} onRemoveSet={() => removeSet(cur)} onStartTimed={i => startTimed(cur, i)} onTargetField={(f, v) => setTarget(cur, f, v)} />
       )}
     </> : <div className="empty"><div className="ico"><Icon name="shuffle" /></div>{t('Freestyle workout — add your first exercise.')}</div>}
 

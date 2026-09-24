@@ -105,7 +105,23 @@ function effectiveRoutineId(S, iso) {
   if (ov === 'rest') return null;
   if (ov && S.routines?.some(r => r.id === ov)) return ov;
   const wd = new Date(iso + 'T12:00:00').getDay();
-  return S.week?.[wd] || null;
+  return weekFor(S, iso)?.[wd] || null;
+}
+// Weekly programs with rotation — duplicated from frontend/src/lib/programs.js programFor.
+function mondayMs(iso) {
+  const d = new Date(iso + 'T12:00:00');
+  d.setDate(d.getDate() - (d.getDay() + 6) % 7);
+  return d.getTime();
+}
+function weekFor(S, iso) {
+  const ps = S.programs || [];
+  if (!ps.length) return S.week;
+  let i = Math.max(0, ps.findIndex(p => p.id === S.program));
+  if (S.rotate > 0 && ps.length > 1 && S.programFrom) {
+    const k = Math.floor(Math.round((mondayMs(iso) - mondayMs(S.programFrom)) / (7 * 864e5)) / S.rotate);
+    i = (((i + k) % ps.length) + ps.length) % ps.length;
+  }
+  return ps[i].week;
 }
 // Computes "now" in an arbitrary IANA zone (e.g. "Europe/Lisbon") instead of the server's own —
 // each user's reminder fires by their own clock, wherever they and their phone actually are.

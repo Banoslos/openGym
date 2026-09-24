@@ -12,6 +12,7 @@ import { EXIDX, isBodyweightEq } from './exercises.js'
 import { modeOf, fmtSec, isBw, isPerSide, sideReps } from './history.js'
 import { uid, todayISO, DAYN, fmtNum, exCount } from './format.js'
 import { t } from './i18n.js'
+import { editableWeek } from './programs.js'
 
 const PLAN_FMT = 1
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]   // Mon-first, matching the Plan screen
@@ -129,9 +130,10 @@ export function mergePlan(s, bundle, { schedule } = {}) {
     })
   })
   if (schedule) {
-    WEEK_ORDER.forEach(d => { delete s.week[d] })
+    const week = editableWeek(s)
+    WEEK_ORDER.forEach(d => { delete week[d] })
     Object.entries(bundle.week || {}).forEach(([d, oldId]) => {
-      if (ridMap[oldId]) s.week[d] = ridMap[oldId]
+      if (ridMap[oldId]) week[d] = ridMap[oldId]
     })
   }
   return { routines: bundle.routines.length }

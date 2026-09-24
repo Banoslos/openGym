@@ -57,7 +57,7 @@ function Sheet({ sheet }) {
     <div>
       <div className="mback" onClick={() => { if (!sheet.locked) close() }} />
       <div className="sheet" ref={ref} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-        <div className="grab" />
+        {!sheet.locked && <div className="grab" />}
         {sheet.render(close)}
       </div>
     </div>

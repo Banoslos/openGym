@@ -2,6 +2,7 @@
 import { todayISO, isoOf, weekKey, fmtNum } from './format.js'
 import { isCardio, isBodyweightEq } from './exercises.js'
 import { t } from './i18n.js'
+import { weekFor } from './programs.js'
 
 // How an exercise is logged (issue #16). This used to be derived from the body part alone,
 // which meant a plank or a farmer's carry could only be timed by filing it under cardio.
@@ -107,6 +108,16 @@ export function setLabel(id, s, cfg) {
   }
   return `${fmtNum(s.w || 0)}×${reps}` + effortTail(s)
 }
+// Rest between sets, resolved in order of specificity: a value typed on the set that was just
+// finished wins over the exercise's own default, which wins over the profile-wide default in
+// S.restSec. Any level left unset (0/undefined — the routine builder never writes a 0) falls
+// through to the next, so a plan written before per-exercise rest existed keeps behaving exactly
+// as before: every set rests for S.restSec.
+export function restSecFor(S, cfg, set) {
+  if (set && set.restSec > 0) return set.restSec
+  if (cfg && cfg.restSec > 0) return cfg.restSec
+  return S.restSec
+}
 // Default config for a freshly added exercise.
 export function defaultConfig(id, mode) {
   const m = mode || modeOf({ id })
@@ -163,7 +174,7 @@ export function effectiveRoutineId(S, iso) {
   if (ov === 'rest') return null
   if (ov && S.routines.some(r => r.id === ov)) return ov
   const wd = new Date(iso + 'T12:00:00').getDay()
-  return S.week[wd] || null
+  return weekFor(S, iso)[wd] || null
 }
 export function effectiveRoutine(S, iso) {
   const id = effectiveRoutineId(S, iso)
