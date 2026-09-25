@@ -15,6 +15,8 @@ import Icon from './components/Icon.jsx'
 import { Button, Slider, Switch, Segmented, SelectRow, Row, TextArea } from './components/ui.jsx'
 import { glyphOf, GLYPH_GROUPS, DEFAULT_GLYPH } from './lib/glyphs.js'
 import BodyMap from './components/BodyMap.jsx'
+import LineChart from './components/LineChart.jsx'
+import { exerciseTrend, BASELINE } from './lib/trend.js'
 import { loadOfWorkouts } from './lib/muscles.js'
 import { parseImport, mergeImport } from './lib/import-csv.js'
 import { buildPlanBundle, parsePlan, mergePlan, printPlan } from './lib/plan-share.js'
@@ -475,8 +477,10 @@ function ProgressionFields({ ex, mode, c, setC, routine, unit }) {
     </div>
     <div className="small dim" style={{ marginBottom: active === 'off' ? 18 : 10 }}>{t(POLICY_DESC[active])}</div>
     {active !== 'off' && <div className="row cfgrow" style={{ marginBottom: 18 }}>
-      <Stepper label={mode === 'time' ? t('Step (seconds)') : t('Step ({0})', unit)} value={inc}
-        step={mode === 'time' ? 5 : 1.25} decimal={mode !== 'time'} onChange={v => setC(x => ({ ...x, inc: v }))} />
+      {active !== 'reps' && <Stepper label={mode === 'time' ? t('Step (seconds)') : t('Step ({0})', unit)} value={inc}
+        step={mode === 'time' ? 5 : 1.25} decimal={mode !== 'time'} onChange={v => setC(x => ({ ...x, inc: v }))} />}
+      {active === 'reps' && <Stepper label={t('Up to (reps)')} value={c.repsMax || 0}
+        step={1} decimal={false} onChange={v => setC(x => ({ ...x, repsMax: v }))} />}
       {active === 'double' && <Stepper label={t('Reps from')} value={c.repsMin || Math.max(1, (c.reps || 10) - 2)}
         step={1} decimal={false} onChange={v => setC(x => ({ ...x, repsMin: v }))} />}
     </div>}
@@ -522,12 +526,13 @@ function ExConfig({ ex, existing, onSave, onDelete, close, routine }) {
     else {
       // A unilateral target is stored even: the split has to divide, and a typed 15 would
       // otherwise plan seven reps on one side and eight on the other, every session.
-      const typed = Math.max(1, Math.round(c.reps) || 10)
+      // 0 is kept: it means "to failure" (see toFailure), not a missing value.
+      const typed = c.reps === 0 ? 0 : Math.max(1, Math.round(c.reps) || 10)
       const reps = perSide ? Math.ceil(typed / 2) * 2 : typed
       const out = { sets, mode: 'reps', reps, weight: Math.max(0, c.weight || 0), ...flags, ...(perSide ? { side: true } : {}), ...prog, ...extra }
-      if (policyFor({ ...c, id: ex.id }, routine, 'reps') === 'double') out.repsMin = Math.min(reps, Math.max(1, Math.round(c.repsMin) || Math.max(1, reps - 2)))
+      if (reps > 0 && policyFor({ ...c, id: ex.id }, routine, 'reps') === 'double') out.repsMin = Math.min(reps, Math.max(1, Math.round(c.repsMin) || Math.max(1, reps - 2)))
       // A ceiling below the working reps would tell you to add a set on day one.
-      if (bw && !(out.weight > 0) && c.repsMax > 0) out.repsMax = Math.max(reps, Math.round(c.repsMax))
+      if (reps > 0 && ((bw && !(out.weight > 0)) || policyFor({ ...c, id: ex.id }, routine, 'reps') === 'reps') && c.repsMax > 0) out.repsMax = Math.max(reps, Math.round(c.repsMax))
       onSave(out)
     }
   }
@@ -554,12 +559,15 @@ function ExConfig({ ex, existing, onSave, onDelete, close, routine }) {
         <Stepper label={t('Weight ({0})', st.unit)} value={c.weight} step={2.5} onChange={v => setC(x => ({ ...x, weight: v }))} />
       </> : <>
         <Stepper label={t('Sets')} value={c.sets} step={1} decimal={false} onChange={v => setC(x => ({ ...x, sets: v }))} />
-        <Stepper label={t('Reps')} value={c.reps} step={perSide ? 2 : 1} decimal={false} onChange={v => setC(x => ({ ...x, reps: v }))} />
+        <Stepper label={t('Reps')} value={c.reps} step={perSide ? 2 : 1} decimal={false} zeroLabel={t('Failure')} onChange={v => setC(x => ({ ...x, reps: v }))} />
         {/* On bodyweight work the weight stepper is the click #32 is about, so it is not here
             until there is a belt to describe — see the added-weight row below. */}
         {!bw && <Stepper label={t('Weight ({0})', st.unit)} value={c.weight} step={2.5} onChange={v => setC(x => ({ ...x, weight: v }))} />}
       </>}
     </div>
+    {mode === 'reps' && c.reps === 0 && <div className="small dim" style={{ marginTop: -10, marginBottom: 18 }}>
+      {t('Every set to failure — log the reps you actually got during the workout.')}
+    </div>}
     {mode === 'time' && !bw && <div className="small dim" style={{ marginBottom: 18 }}>
       {t('A timer runs while you hold the set. Leave the weight at 0 for bodyweight holds.')}
     </div>}
@@ -589,11 +597,11 @@ function ExConfig({ ex, existing, onSave, onDelete, close, routine }) {
       </div>
     </>}
     {/* The rep ceiling only means something when there is no load to add instead. */}
-    {mode === 'reps' && bw && !(c.weight > 0) && <div className="row cfgrow" style={{ marginBottom: 18 }}>
+    {mode === 'reps' && bw && !(c.weight > 0) && c.reps !== 0 && <div className="row cfgrow" style={{ marginBottom: 18 }}>
       <Stepper label={t('Top of the range')} value={c.repsMax || 0} step={1} decimal={false}
         onChange={v => setC(x => ({ ...x, repsMax: v }))} />
     </div>}
-    {mode === 'reps' && bw && !(c.weight > 0) && <div className="small dim" style={{ marginTop: -10, marginBottom: 18 }}>
+    {mode === 'reps' && bw && !(c.weight > 0) && c.reps !== 0 && <div className="small dim" style={{ marginTop: -10, marginBottom: 18 }}>
       {c.repsMax > 0
         ? t('Reps climb to {0}, then a set is added and the reps start over. At {1} sets it asks you to add weight instead.', c.repsMax, MAX_BW_SETS)
         : t('Reps climb by one whenever every set was clean. Set a ceiling to add sets instead of reps forever.')}
@@ -779,6 +787,29 @@ function DayAssign({ day, programId, close }) {
 export const dayAssignSheet = (day, programId) => ui().openSheet(close => <DayAssign day={day} programId={programId} close={close} />)
 
 /* ============================ workout detail ============================ */
+// One exercise's score across sessions up to this workout, with a verdict against the
+// average of the sessions before it (see lib/trend.js for what is scored and why).
+const TREND_LABEL = { e1rm: 'Estimated 1RM', reps: 'Best set (reps)', sec: 'Longest hold (s)' }
+const TREND_WORD = { up: 'Improving', down: 'Declining', steady: 'Steady' }
+const TREND_ICON = { up: 'arrowUp', down: 'arrowDown', steady: 'minus' }
+function ExerciseTrend({ st, w, e }) {
+  if (!w.id) return null
+  const tr = exerciseTrend(st, e.id, w.id)
+  if (!tr.metric || !tr.points.length) return null
+  if (tr.verdict === 'first') return <div className="small dim trend-first">{t('First time logged — the next session will show a trend.')}</div>
+  const unit = tr.metric === 'e1rm' ? st.unit : tr.metric === 'reps' ? t('reps') : 's'
+  const pct = Math.round(tr.delta * 1000) / 10
+  const base = Math.min(BASELINE, tr.points.length - 1)
+  return <div className="trend">
+    <div className="row between trend-h">
+      <span className="dim">{t(TREND_LABEL[tr.metric])}</span>
+      <span className={'trend-v ' + tr.verdict}><Icon name={TREND_ICON[tr.verdict]} />{t(TREND_WORD[tr.verdict])} {(pct > 0 ? '+' : '') + fmtNum(pct)}%</span>
+    </div>
+    <div className="chart"><LineChart points={tr.points} h={96} unit={unit} color={tr.verdict === 'down' ? 'var(--red)' : 'var(--acc)'} /></div>
+    <div className="small dim">{t(base === 1 ? 'Compared with the previous session' : 'Compared with the average of the last {0} sessions', base)}</div>
+  </div>
+}
+
 function WorkoutDetail({ w, close }) {
   const st = useStore(s => s.S)
   return <>
@@ -789,7 +820,8 @@ function WorkoutDetail({ w, close }) {
       return <div key={i} className="row" style={{ marginBottom: 12, alignItems: 'flex-start' }}>
         {ex && <Thumb ex={ex} />}
         <div className="grow"><div className="tt capitalize" style={{ fontWeight: 600 }}>{ex ? ex.n : (e.n || e.id)} {w.prs && w.prs.includes(e.id) && <span className="pr"><Icon name="trophy" />PR</span>}</div>
-          <div className="ss">{e.sets.filter(s => s.done).map(s => setLabel(e.id, s, e.target)).join('  ·  ') || t('no sets')}</div></div>
+          <div className="ss">{e.sets.filter(s => s.done).map(s => setLabel(e.id, s, e.target)).join('  ·  ') || t('no sets')}</div>
+          <ExerciseTrend st={st} w={w} e={e} /></div>
       </div>
     })}
     <Button variant="danger" onClick={() => confirmSheet({ title: t('Delete workout?'), message: t('This removes it from your history for good.'), confirmText: t('Delete'), danger: true, onConfirm: () => { update(s => { s.workouts = s.workouts.filter(x => x.id !== w.id) }); close(); toast(t('Workout deleted')) } })}>{t('Delete workout')}</Button>
@@ -954,6 +986,8 @@ function FinishSummary({ w, prs, e1prs = [], close }) {
     <BodyMap load={loadOfWorkouts([w])} body={st.body} />
     <div style={{ height: 14 }} />
     <Button variant="primary" onClick={() => { close(); nav('/home') }}>{t('Nice!')}</Button>
+    <div style={{ height: 8 }} />
+    <Button icon="chartLine" onClick={() => { close(); nav('/home'); workoutDetailSheet(w) }}>{t('Workout details & progress')}</Button>
   </div>
 }
 export function finishWorkout() {

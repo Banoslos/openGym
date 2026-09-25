@@ -450,3 +450,41 @@ describe('applyPrescription', () => {
     expect(applyPrescription(sets, { kind: 'up', weight: 60, sets: 1 })).toHaveLength(sets.length)
   })
 })
+
+describe('sets to failure (reps: 0)', () => {
+  const cfg = { id: LIFT, sets: 3, reps: 0, weight: 40 }
+  const T = { sets: 3, reps: 0, weight: 40 }
+  it('holds the weight until every set reaches the ceiling, and never deloads', () => {
+    const S = hist(LIFT, [[40, 10, 9, 8], [40, 10, 9, 8], [40, 10, 9, 8], [40, 10, 9, 8]], T)
+    const p = nextPrescription(S, cfg)
+    expect(p.kind).toBe('hold')
+    expect(p.weight).toBe(40)
+    expect(p.reps).toBeUndefined()
+  })
+  it('adds weight once every set to failure reaches 12', () => {
+    const p = nextPrescription(hist(LIFT, [[40, 14, 13, 12]], T), cfg)
+    expect(p.kind).toBe('up')
+    expect(p.weight).toBe(42.5)
+  })
+  it('leaves bodyweight sets to failure alone', () => {
+    const p = nextPrescription(hist(LIFT, [[0, 15, 12, 10]], { sets: 3, reps: 0 }), { id: LIFT, sets: 3, reps: 0, bodyweight: true })
+    expect([p.kind, p.weight, p.reps]).toEqual(['hold', 0, undefined])
+  })
+})
+
+describe('add reps policy', () => {
+  const cfg = { id: LIFT, sets: 3, reps: 8, weight: 20, prog: 'reps' }
+  it('is offered for reps work', () => { expect(POLICIES_FOR.reps).toContain('reps') })
+  it('adds a rep at the same weight after a clean session', () => {
+    const p = nextPrescription(hist(LIFT, [[20, 8, 8, 8]], { sets: 3, reps: 8 }), cfg)
+    expect([p.kind, p.weight, p.reps]).toEqual(['up', 20, 9])
+  })
+  it('repeats the target after a miss', () => {
+    const p = nextPrescription(hist(LIFT, [[20, 8, 8, 6]], { sets: 3, reps: 8 }), cfg)
+    expect([p.kind, p.weight, p.reps]).toEqual(['hold', 20, 8])
+  })
+  it('stops at the ceiling and asks for weight', () => {
+    const p = nextPrescription(hist(LIFT, [[20, 12, 12, 12]], { sets: 3, reps: 12 }), { ...cfg, reps: 12, repsMax: 12 })
+    expect([p.kind, p.reps]).toEqual(['hold', 12])
+  })
+})

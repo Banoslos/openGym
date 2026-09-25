@@ -39,6 +39,10 @@ export const isPerSide = cfg => !!(cfg && cfg.side)
 export const sideReps = reps => (reps || 0) / 2
 // Unilateral work moves in pairs, so its rep target steps by two — 16, 18, 20 — and a total
 // that stayed odd would put a rep on one side and not the other.
+// A rep target of 0 means "to failure": no fixed count, you log what you got. Only a real 0
+// counts — a missing target still falls back to the usual default wherever one applies.
+export const toFailure = cfg => !!cfg && cfg.reps === 0 && modeOf(cfg) === 'reps'
+export const repsText = reps => (reps === 0 ? t('to failure') : String(reps ?? 10))
 export const repStep = cfg => (isPerSide(cfg) ? 2 : 1)
 
 // mm:ss for a work duration — seconds alone read badly past a minute ("90 s" vs "1:30").
@@ -138,8 +142,8 @@ export function exLine(cfg, unit) {
   if (mode === 'cardio') return `${n} × ${cfg.min || 20} min @ ${fmtNum(cfg.speed || 8)} km/h`
   if (mode === 'time') return `${n} × ${fmtSec(cfg.sec || 45)}${load}`
   // This is the line with room for it, so the split is spelled out: "3 × 16 · 8/side".
-  const split = isPerSide(cfg) ? ' · ' + t('{0}/side', fmtNum(sideReps(cfg.reps))) : ''
-  return `${n} × ${cfg.reps}${load}${split}`
+  const split = isPerSide(cfg) && !toFailure(cfg) ? ' · ' + t('{0}/side', fmtNum(sideReps(cfg.reps))) : ''
+  return `${n} × ${repsText(cfg.reps)}${load}${split}`
 }
 
 // Drop superset ids that no longer have an adjacent partner (after unlink/reorder/remove).

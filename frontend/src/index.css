@@ -968,3 +968,13 @@ h4.sec{
 .prog-chips .chip{display:inline-flex;align-items:center;gap:4px}
 .prog-dot{font-size:9px;color:var(--acc)}
 .prog-chips .chip.on .prog-dot{color:inherit}
+.stp .val .stp-zero{width:100%;height:auto;align-self:center;background:none;border:0;color:var(--acc);font-weight:600;font-size:15px;padding:0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stp .val .stp-zero:active{background:none}
+/* per-exercise trend in workout details */
+.trend{margin-top:8px;padding:8px 10px 6px;background:var(--surface-2);border-radius:12px}
+.trend-h{font-size:12.5px;margin-bottom:2px}
+.trend-v{display:inline-flex;align-items:center;gap:3px;font-weight:600}
+.trend-v.up{color:var(--green)}
+.trend-v.down{color:var(--red)}
+.trend-v.steady{color:var(--label-2)}
+.trend-first{margin-top:6px}

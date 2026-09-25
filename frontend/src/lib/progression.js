@@ -16,14 +16,14 @@
 //   · fewer sets than prescribed                       → miss
 // So a session that fell apart can never advance the load as though it had succeeded.
 
-import { modeOf, repStep } from './history.js'
+import { modeOf, repStep, toFailure } from './history.js'
 import { EXIDX } from './exercises.js'
 
-export const POLICIES = ['off', 'linear', 'greyskull', 'double', 'time']
+export const POLICIES = ['off', 'linear', 'greyskull', 'double', 'reps', 'time']
 
 // Which policies can sensibly drive which logging mode.
 export const POLICIES_FOR = {
-  reps: ['off', 'linear', 'greyskull', 'double'],
+  reps: ['off', 'linear', 'greyskull', 'double', 'reps'],
   time: ['off', 'time'],
   cardio: ['off']
 }
@@ -33,6 +33,7 @@ export const POLICY_NAME = {
   linear: 'Linear progression',
   greyskull: 'Greyskull LP',
   double: 'Double progression',
+  reps: 'Add reps',
   time: 'Add time'
 }
 export const POLICY_DESC = {
@@ -40,6 +41,7 @@ export const POLICY_DESC = {
   linear: 'Hit every rep in every set and the weight goes up. Repeated misses trigger a deload.',
   greyskull: 'Two straight sets plus a final set taken to failure. Beat the target on that set and the weight goes up — double if you double the reps. One failure resets 10 %.',
   double: 'Work up through a rep range at the same weight. Reach the top of the range in every set and the weight goes up, reps back to the bottom.',
+  reps: 'The weight stays put. Hit every rep and the target goes up by one. Set a ceiling to be told when it is time to add weight.',
   time: 'Hold every set for the full duration and the target goes up.'
 }
 
@@ -63,6 +65,9 @@ export const DEFAULT_SEC_INCREMENT = 5
 // Where adding another set of push-ups stops being progress and starts being a way to spend
 // an evening. Past this the honest advice is load or a harder variation (issue #33).
 export const MAX_BW_SETS = 6
+// Sets to failure (a rep target of 0) add weight once every set reaches this many reps —
+// past it the set is endurance work, and a heavier load brings the reps back down.
+export const FAILURE_TOP = 12
 
 // The policy in force for one exercise: its own override, else the routine's default, else
 // the mode's default. Reps keeps behaving the way the app always did (all reps → add a step).
@@ -182,6 +187,14 @@ export function nextPrescription(S, cfg, routine) {
   }
 
   const w = last.weight
+  // Sets to failure have no rep target to hit or miss, so the policies' hit/miss reading does
+  // not apply: judged on reps instead, and never deloaded — a set to failure cannot fail.
+  if (toFailure(cfg)) {
+    if (w <= 0) return { policy, kind: 'hold', weight: 0, why: ['To failure — try to beat last time’s reps.'] }
+    const done = last.reps.length >= (cfg.sets || 1) && last.low >= FAILURE_TOP
+    if (done) return { policy, kind: 'up', weight: snap(w + inc, inc), why: ['{0}+ reps in every set to failure — {1} {2} more.', FAILURE_TOP, inc, unit] }
+    return { policy, kind: 'hold', weight: w, why: ['To failure — reach {0} reps in every set to add weight.', FAILURE_TOP] }
+  }
   // Bodyweight work carries no external load, so there is nothing to add or take away —
   // "deload your push-ups to 2.5 kg" is not advice. Progress in reps instead. This runs ahead
   // of the individual policies because it is true for all of them. Note the trigger is the
@@ -205,6 +218,15 @@ export function nextPrescription(S, cfg, routine) {
     // Unilateral work steps by two, so the total stays even and both sides get the rep.
     const next = goal + repStep(cfg)
     return { policy, kind: 'up', weight: 0, reps: next, why: ['Bodyweight — every rep last time, so go for {0} this time.', next] }
+  }
+  // Reps-only progression: the load never changes, the target climbs one rep per clean session.
+  if (policy === 'reps') {
+    const goal = last.goal || cfg.reps || 0
+    const top = cfg.repsMax > 0 ? cfg.repsMax : 0
+    if (!last.ok || goal <= 0) return { policy, kind: 'hold', weight: w, reps: goal || undefined, why: ['Missed reps last time — same target again.'] }
+    if (top > 0 && goal >= top) return { policy, kind: 'hold', weight: w, reps: goal, why: ['{0} reps in every set — time to add weight.', goal] }
+    const next = goal + repStep(cfg)
+    return { policy, kind: 'up', weight: w, reps: next, why: ['Every rep last time — go for {0} this time.', next] }
   }
   if (policy === 'double') {
     const top = cfg.reps || last.goal || 10

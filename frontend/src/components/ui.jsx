@@ -23,7 +23,7 @@ import Icon from './Icon.jsx'
 // 0). Keeps a local string draft while focused so partial input like "33," survives.
 // `nullable` is for fields where "nothing entered" and 0 mean different things (RIR: a
 // logged 0 is a set taken to failure). Those clear back to null instead of snapping to 0.
-export function NumberField({ value, onChange, decimal = true, nullable = false, className = '', ...rest }) {
+export function NumberField({ value, onChange, decimal = true, nullable = false, className = '', onBlur, ...rest }) {
   const [draft, setDraft] = useState(null)
   const committed = useRef(null)
   // null and undefined are the same "empty" here — a nullable field's key is dropped once cleared.
@@ -45,7 +45,7 @@ export function NumberField({ value, onChange, decimal = true, nullable = false,
       value={draft ?? (value ?? '')}
       onFocus={e => e.target.select()}
       onChange={e => commit(e.target.value)}
-      onBlur={() => { setDraft(null); committed.current = null }}
+      onBlur={e => { setDraft(null); committed.current = null; onBlur?.(e) }}
       {...rest}
     />
   )
@@ -115,14 +115,20 @@ export function Segmented({ options, value, onChange, className = '' }) {
 
 /* ============================ stepper ============================ */
 
-export function Stepper({ value, step = 1, onChange, decimal = true, className = '', label, unit }) {
+// zeroLabel: shown in place of a 0 (e.g. "Failure" for a rep target). Tapping it brings the
+// number field back so a count can be typed again.
+export function Stepper({ value, step = 1, onChange, decimal = true, className = '', label, unit, zeroLabel }) {
   const set = v => onChange(Math.max(0, Math.round((v || 0) * 100) / 100))
+  const [typing, setTyping] = useState(false)
+  const showZero = zeroLabel && value === 0 && !typing
   const inner = (
     <div className={'stp ' + className}>
       <button onClick={() => set((+value || 0) - step)} aria-label="Decrease"><Icon name="minus" /></button>
       <span className="val">
-        <NumberField value={value} decimal={decimal} onChange={onChange} />
-        {unit && <i>{unit}</i>}
+        {showZero
+          ? <button className="stp-zero" onClick={() => setTyping(true)}>{zeroLabel}</button>
+          : <NumberField value={value} decimal={decimal} onChange={onChange} autoFocus={typing} onBlur={() => setTyping(false)} />}
+        {unit && !showZero && <i>{unit}</i>}
       </span>
       <button onClick={() => set((+value || 0) + step)} aria-label="Increase"><Icon name="plus" /></button>
     </div>
