@@ -705,4 +705,5 @@ export default {
   'L': 'SX',
   'R': 'DX',
   'Workout details & progress': 'Dettagli e progressi',
+  'Not every set at {0} {1} last time — {0} {1} in every set this time.': 'L\'ultima volta non tutte le serie a {0} {1} — stavolta {0} {1} in ogni serie.',
 }

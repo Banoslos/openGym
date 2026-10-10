@@ -128,9 +128,13 @@ export function readSession(entry, fallback) {
   // Every rep at a lighter weight is not every rep: one set dropped to 57.5 under a 60 top set
   // means 60 was not held for the session, so it must not count as earning the next step.
   const held = sets.every(s => !s.done || (s.w || 0) >= weight - 1e-9)
+  // The weight every set reached — what the session actually proves you can do for the reps.
+  const done = sets.filter(s => s.done)
+  const base = done.length ? Math.min(...done.map(s => s.w || 0)) : 0
   return {
     mode, goal, reps, held,
-    weight,
+    weight, base,
+    repsOk: goal > 0 && enough && reps.length > 0 && reps.every(r => r >= goal),
     count: reps.length,                                   // the dimension bodyweight work grows (#33)
     low: reps.length ? Math.min(...reps) : 0,
     amrap: reps.length ? reps[reps.length - 1] : 0,       // Greyskull's final set
@@ -244,6 +248,15 @@ export function nextPrescription(S, cfg, routine) {
     }
     const aim = Math.min(top, Math.max(bottom, last.low + repStep(cfg)))
     return { policy, kind: 'hold', weight: w, reps: aim, why: ['Same weight — aim for {0} reps this time.', aim] }
+  }
+
+  // Every rep, but not every set at the top weight: the lightest set is what was proven for
+  // the full prescription, so the step is taken from there — 60/60/62.5 moves everything to
+  // 62.5, while 57.5/60/60 only brings the lighter set up to 60 instead of jumping to 62.5.
+  if (!last.held && last.repsOk && last.base > 0 && (policy === 'linear' || policy === 'greyskull')) {
+    const next = snap(last.base + inc, inc)
+    if (next > w) return { policy, kind: 'up', weight: next, why: ['Every rep last time — {0} {1} more.', inc, unit] }
+    return { policy, kind: 'up', weight: w, why: ['Not every set at {0} {1} last time — {0} {1} in every set this time.', w, unit] }
   }
 
   // linear + greyskull

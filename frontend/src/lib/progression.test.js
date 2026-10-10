@@ -491,13 +491,26 @@ describe('add reps policy', () => {
 
 describe('lighter sets and set types', () => {
   const T = { sets: 3, reps: 5 }
-  it('a working set below the top weight is a miss, so the weight does not go up', () => {
-    const entry = { id: LIFT, target: T, sets: [{ w: 60, r: 5, done: true }, { w: 60, r: 5, done: true }, { w: 57.5, r: 5, done: true }] }
-    expect(readSession(entry).ok).toBe(false)
-    const S = { unit: 'kg', workouts: [{ d: '2026-01-01', entries: [entry] }] }
-    const p = nextPrescription(S, { id: LIFT, ...T, weight: 60 })
-    expect(p.kind).toBe('hold')
-    expect(p.weight).toBe(60)
+  const after = sets => {
+    const entry = { id: LIFT, target: T, sets: sets.map(w => ({ w, r: 5, done: true })) }
+    return nextPrescription({ unit: 'kg', workouts: [{ d: '2026-01-01', entries: [entry] }] }, { id: LIFT, ...T, weight: 60 })
+  }
+  it('a working set below the top weight does not earn a step above the top', () => {
+    expect(readSession({ id: LIFT, target: T, sets: [{ w: 60, r: 5, done: true }, { w: 57.5, r: 5, done: true }] }).ok).toBe(false)
+    const p = after([60, 60, 57.5])
+    expect([p.kind, p.weight]).toEqual(['up', 60])
+  })
+  it('every rep at the same weight in every set adds a step', () => {
+    expect(after([60, 60, 60]).weight).toBe(62.5)
+  })
+  it('one heavier set still progresses from the weight held in every set', () => {
+    expect(after([60, 60, 62.5]).weight).toBe(62.5)
+    expect(after([60, 60, 62.5]).kind).toBe('up')
+  })
+  it('missed reps at a lighter weight stay a miss', () => {
+    const entry = { id: LIFT, target: T, sets: [{ w: 60, r: 5, done: true }, { w: 57.5, r: 3, done: true }] }
+    const p = nextPrescription({ unit: 'kg', workouts: [{ d: '2026-01-01', entries: [entry] }] }, { id: LIFT, ...T, weight: 60 })
+    expect([p.kind, p.weight]).toEqual(['hold', 60])
   })
 
   it('warm-ups and drop sets are not judged', () => {
