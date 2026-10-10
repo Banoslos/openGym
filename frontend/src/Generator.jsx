@@ -51,7 +51,7 @@ function ExPrefList({ title, ids, onAdd, onRemove }) {
   </>
 }
 
-function Generator({ close }) {
+function Generator({ close, group }) {
   const st = useStore(s => s.S)
   const [o, setO] = useState(() => ({ ...DEFAULTS, ...(st.genPrefs || {}) }))
   const [seed, setSeed] = useState(() => Date.now() % 100000)
@@ -91,7 +91,7 @@ function Generator({ close }) {
     })
   }
   const save = start => {
-    const r = { id: uid(), name: name.trim() || nameFor(o.groups), emoji: glyphFor(o.groups), ex: res.ex.map(c => ({ ...c })) }
+    const r = { id: uid(), name: name.trim() || nameFor(o.groups), emoji: glyphFor(o.groups), ex: res.ex.map(c => ({ ...c })), ...(group ? { group } : {}) }
     update(s => { s.routines.push(r) })
     close()
     if (start) startFlow(r.id)
@@ -154,4 +154,5 @@ function Generator({ close }) {
   </>
 }
 
-export const generatorSheet = () => ui().openSheet(close => <Generator close={close} />)
+// group: the group a saved routine goes into (default: the one in use).
+export const generatorSheet = group => ui().openSheet(close => <Generator close={close} group={typeof group === 'string' ? group : undefined} />)

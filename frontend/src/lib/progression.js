@@ -14,9 +14,11 @@
 //   · a set checked off with fewer reps                → miss (you logged what you got)
 //   · a set never checked off                          → miss (it was not performed)
 //   · fewer sets than prescribed                       → miss
+//   · a working set lighter than the session's top one → miss (the weight was not held)
+// Warm-ups and drop sets are left out entirely — they are lighter on purpose.
 // So a session that fell apart can never advance the load as though it had succeeded.
 
-import { modeOf, repStep, toFailure } from './history.js'
+import { modeOf, repStep, toFailure, isWorking } from './history.js'
 import { EXIDX } from './exercises.js'
 
 export const POLICIES = ['off', 'linear', 'greyskull', 'double', 'reps', 'time']
@@ -106,7 +108,7 @@ function deloadTo(cur, step) {
 export function readSession(entry, fallback) {
   const target = (entry && entry.target) || fallback || {}
   const mode = modeOf({ ...target, id: entry && entry.id })
-  const sets = (entry && entry.sets) || []
+  const sets = ((entry && entry.sets) || []).filter(isWorking)
   const planned = target.sets || sets.length
   const enough = sets.length >= planned
 
@@ -122,13 +124,17 @@ export function readSession(entry, fallback) {
   }
   const goal = target.reps || 0
   const reps = sets.map(s => (s.done ? (s.r || 0) : 0))
+  const weight = Math.max(0, ...sets.filter(s => s.done).map(s => s.w || 0))
+  // Every rep at a lighter weight is not every rep: one set dropped to 57.5 under a 60 top set
+  // means 60 was not held for the session, so it must not count as earning the next step.
+  const held = sets.every(s => !s.done || (s.w || 0) >= weight - 1e-9)
   return {
-    mode, goal, reps,
-    weight: Math.max(0, ...sets.filter(s => s.done).map(s => s.w || 0)),
+    mode, goal, reps, held,
+    weight,
     count: reps.length,                                   // the dimension bodyweight work grows (#33)
     low: reps.length ? Math.min(...reps) : 0,
     amrap: reps.length ? reps[reps.length - 1] : 0,       // Greyskull's final set
-    ok: goal > 0 && enough && reps.length > 0 && reps.every(r => r >= goal)
+    ok: goal > 0 && enough && held && reps.length > 0 && reps.every(r => r >= goal)
   }
 }
 
@@ -191,7 +197,7 @@ export function nextPrescription(S, cfg, routine) {
   // not apply: judged on reps instead, and never deloaded — a set to failure cannot fail.
   if (toFailure(cfg)) {
     if (w <= 0) return { policy, kind: 'hold', weight: 0, why: ['To failure — try to beat last time’s reps.'] }
-    const done = last.reps.length >= (cfg.sets || 1) && last.low >= FAILURE_TOP
+    const done = last.reps.length >= (cfg.sets || 1) && last.held && last.low >= FAILURE_TOP
     if (done) return { policy, kind: 'up', weight: snap(w + inc, inc), why: ['{0}+ reps in every set to failure — {1} {2} more.', FAILURE_TOP, inc, unit] }
     return { policy, kind: 'hold', weight: w, why: ['To failure — reach {0} reps in every set to add weight.', FAILURE_TOP] }
   }
@@ -223,7 +229,7 @@ export function nextPrescription(S, cfg, routine) {
   if (policy === 'reps') {
     const goal = last.goal || cfg.reps || 0
     const top = cfg.repsMax > 0 ? cfg.repsMax : 0
-    if (!last.ok || goal <= 0) return { policy, kind: 'hold', weight: w, reps: goal || undefined, why: ['Missed reps last time — same target again.'] }
+    if (!last.ok || goal <= 0) return { policy, kind: 'hold', weight: w, reps: goal || undefined, why: [last.held ? 'Missed reps last time — same target again.' : 'Not every set at {0} {1} last time — same target again.', w, unit] }
     if (top > 0 && goal >= top) return { policy, kind: 'hold', weight: w, reps: goal, why: ['{0} reps in every set — time to add weight.', goal] }
     const next = goal + repStep(cfg)
     return { policy, kind: 'up', weight: w, reps: next, why: ['Every rep last time — go for {0} this time.', next] }
@@ -262,6 +268,7 @@ export function nextPrescription(S, cfg, routine) {
         : ['Missed reps — reset to {0} {1} and work back up.', dw, unit]
     }
   }
+  if (!last.held) return { policy, kind: 'hold', weight: w, why: ['Not every set at {0} {1} last time — same weight again.', w, unit] }
   return { policy, kind: 'hold', weight: w, why: ['Missed reps last time — same weight again ({0} of {1} to go).', deloadAt - stalls, deloadAt] }
 }
 
@@ -272,9 +279,12 @@ export function nextPrescription(S, cfg, routine) {
 export function applyPrescription(sets, p) {
   if (!p || p.kind === 'off' || p.kind === 'first') return sets
   const out = sets.map(s => {
-    if (s.done) return s
+    // Logged sets are history; warm-ups and drop sets keep their own lighter numbers.
+    if (s.done || !isWorking(s)) return s
     const o = { ...s }
-    if (p.weight != null) o.w = p.weight
+    // Holding means "the same as last time" — and last time's sets are already in the rows,
+    // a lighter back-off set included. Only a change of weight is written over them.
+    if (p.weight != null && p.kind !== 'hold') o.w = p.weight
     if (p.reps != null) o.r = p.reps
     if (p.sec != null) o.sec = p.sec
     return o
@@ -282,9 +292,10 @@ export function applyPrescription(sets, p) {
   // A policy that decided on a set count gets to grow the list — bodyweight progression adds
   // a set where a barbell would have added a plate. Only ever upwards, and only by copying a
   // row that is already there: a session in progress must not lose a set it has logged.
-  if (p.sets > out.length) {
-    const seed = out[out.length - 1]
-    while (out.length < p.sets) out.push({ ...seed, done: false })
+  const working = out.filter(isWorking).length
+  if (p.sets > working) {
+    const { k, ...seed } = [...out].reverse().find(isWorking) || out[out.length - 1]
+    for (let i = working; i < p.sets; i++) out.push({ ...seed, done: false })
   }
   return out
 }

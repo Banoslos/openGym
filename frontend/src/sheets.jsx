@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from './store/useStore.js'
 import { useUI } from './store/useUI.js'
-import { EXDB, EXIDX, BODYPARTS, isCardio, isBodyweightEq, allExercises, equipmentOf } from './lib/exercises.js'
+import { EXDB, EXIDX, BODYPARTS, isCardio, isBodyweightEq, allExercises, equipmentOf, queryWords, matchesQuery, byNameHit } from './lib/exercises.js'
 import { fmtDate, fmtNum, fmtVol, fmtDur, durPart, todayISO, uid, exCount, DAYN, MONTHS_LONG, ACCENTS } from './lib/format.js'
-import { weekFor, editableWeek } from './lib/programs.js'
-import { lastEntryFor, bestWeightFor, buildSets, effectiveRoutineId, workoutVolume, setsDone, setsDoneActive, lastBW, supersetUnits, unitOf, setLabel, defaultConfig, cleanupSg, modeOf, effortOf, isBw, isPerSide, sideReps } from './lib/history.js'
+import { weekFor, editableWeek, groupRoutines, listedRoutines, programFor } from './lib/programs.js'
+import { lastEntryFor, bestWeightFor, buildSets, effectiveRoutineId, workoutVolume, setsDone, setsDoneActive, lastBW, supersetUnits, unitOf, setLabel, setText, isWorking, defaultConfig, cleanupSg, modeOf, effortOf, isBw, isPerSide, sideReps } from './lib/history.js'
 import { beep, vibrate } from './lib/sound.js'
 import { t, instrFor, getLang, INSTR_LANGS } from './lib/i18n.js'
 import { nav } from './lib/nav.js'
@@ -16,7 +16,7 @@ import { Button, Slider, Switch, Segmented, SelectRow, Row, TextArea } from './c
 import { glyphOf, GLYPH_GROUPS, DEFAULT_GLYPH } from './lib/glyphs.js'
 import BodyMap from './components/BodyMap.jsx'
 import LineChart from './components/LineChart.jsx'
-import { exerciseTrend, BASELINE } from './lib/trend.js'
+import { exerciseTrend, routineTrend, exerciseVerdicts, BASELINE } from './lib/trend.js'
 import { loadOfWorkouts } from './lib/muscles.js'
 import { parseImport, mergeImport } from './lib/import-csv.js'
 import { buildPlanBundle, parsePlan, mergePlan, printPlan } from './lib/plan-share.js'
@@ -297,8 +297,9 @@ function ExerciseDetail({ ex, close }) {
       {(ex.sm || []).slice(0, 3).map((s, i) => <span key={i} className="tag">{t(s)}</span>)}
     </div>
     {ex.desc && <div className="exnote">{ex.desc}</div>}
-    {best > 0 && <div className="small row" style={{ marginBottom: 6, gap: 5 }}><Icon name="trophy" style={{ fontSize: 14, color: 'var(--yellow)' }} />{t('Best:')} <b className="accent">{fmtNum(best)} {st.unit}</b>{last ? ` · ${t('last')} ${fmtDate(last.d)}: ${last.sets.map(s => setLabel(ex.id, s, last.target)).join(', ')}` : ''}</div>}
+    {best > 0 && <div className="small row" style={{ marginBottom: 6, gap: 5 }}><Icon name="trophy" style={{ fontSize: 14, color: 'var(--yellow)' }} />{t('Best:')} <b className="accent">{fmtNum(best)} {st.unit}</b>{last ? ` · ${t('last')} ${fmtDate(last.d)}: ${last.sets.map(s => setText(ex.id, s, last.target)).join(', ')}` : ''}</div>}
     <Button variant="primary" icon="plus" style={{ margin: '10px 0 4px' }} onClick={() => addToRoutineSheet(ex)}>{t('Add to my plan')}</Button>
+    <Button variant="ghost" icon="clipboard" style={{ marginTop: 6 }} onClick={() => { close(); variantSheet(ex) }}>{t('Create a variant (e.g. paused, tempo)')}</Button>
     {ex.custom && <div className="row" style={{ gap: 8, marginTop: 8 }}>
       <Button icon="pencil" style={{ flex: 1 }} onClick={() => { close(); customExSheet(ex) }}>{t('Edit')}</Button>
       <Button variant="danger" icon="trash" style={{ flex: 1 }} onClick={() => deleteCustomEx(ex, close)}>{t('Delete')}</Button>
@@ -330,7 +331,7 @@ function AddToRoutine({ ex, close }) {
     <h3 className="capitalize">{t('Add “{0}”', ex.n)}</h3>
     <div className="muted small" style={{ marginBottom: 12 }}>{t('Pick a routine — sets, reps & weight come next.')}</div>
     <div className="list">
-      {st.routines.map(r => <div key={r.id} className="item" onClick={() => pick(r.id)}>
+      {listedRoutines(st).map(r => <div key={r.id} className="item" onClick={() => pick(r.id)}>
         <span className="lrow-i"><Icon name={glyphOf(r.emoji)} /></span>
         <div className="grow"><div className="tt">{r.name}</div><div className="ss">{exCount(r.ex.length)}</div></div>
         {r.ex.some(e => e.id === ex.id) && <span className="tag">{t('already in')}</span>}<Icon name="plus" className="chev" />
@@ -345,9 +346,11 @@ export const addToRoutineSheet = ex => ui().openSheet(close => <AddToRoutine ex=
 /* ============================ custom exercises (issue #11) ============================ */
 // Name + body part is all it takes — the exercise then behaves like any built-in one
 // (planning, logging, PRs, stats), just without an animation.
-function CustomExForm({ existing, prefill, onDone, close }) {
+// `base`: make a variant of an existing exercise ("bench press — 2 s pause"). It is its own
+// exercise with its own history and weights, and borrows the original's animation and data.
+function CustomExForm({ existing, prefill, base, onDone, close }) {
   const [n, setN] = useState(existing ? existing.n : (prefill || ''))
-  const [bp, setBp] = useState(existing ? existing.bp : '')
+  const [bp, setBp] = useState(existing ? existing.bp : base ? base.bp : '')
   const [desc, setDesc] = useState(existing ? (existing.desc || '') : '')
   const save = () => {
     const name = n.trim()
@@ -360,15 +363,16 @@ function CustomExForm({ existing, prefill, onDone, close }) {
     if (existing) update(s => { const c = (s.customEx || []).find(x => x.id === id); if (c) { c.n = name; c.bp = bp; c.desc = d } })
     else {
       id = 'c' + uid()
-      update(s => { (s.customEx = s.customEx || []).push({ id, n: name, bp, desc: d, tg: '', eq: 'custom', custom: true }) })
+      const from = base ? { tg: base.tg || '', eq: base.eq || 'custom', ...(base.img ? { img: base.img, gif: base.gif } : {}), ...(base.mg ? { mg: base.mg } : {}), ...(base.sm ? { sm: base.sm } : {}), base: base.base || base.id } : { tg: '', eq: 'custom' }
+      update(s => { (s.customEx = s.customEx || []).push({ id, n: name, bp, desc: d, ...from, custom: true }) })
     }
     close()
     toast(existing ? t('Saved') : t('“{0}” created', name))
     onDone && onDone(EXIDX[id])
   }
   return <>
-    <h3>{existing ? t('Edit custom exercise') : t('Create your own exercise')}</h3>
-    <div className="muted small" style={{ marginBottom: 12 }}>{t('Name it and pick a body part — it behaves like any other exercise, just without an animation.')}</div>
+    <h3>{existing ? t('Edit custom exercise') : base ? t('New variant') : t('Create your own exercise')}</h3>
+    <div className="muted small" style={{ marginBottom: 12 }}>{base ? t('A separate exercise based on “{0}” — its own history, weights and progress.', base.n) : t('Name it and pick a body part — it behaves like any other exercise, just without an animation.')}</div>
     <input className="input" placeholder={t('Exercise name')} value={n} onChange={e => setN(e.target.value)} />
     <div className="chips" style={{ margin: '12px 0' }}>
       {BODYPARTS.map(b => <button key={b} className={'chip' + (bp === b ? ' on' : '')} onClick={() => setBp(b)}>{t(b)}</button>)}
@@ -381,7 +385,8 @@ function CustomExForm({ existing, prefill, onDone, close }) {
     {existing && <><div style={{ height: 8 }} /><Button variant="danger" icon="trash" onClick={() => { close(); deleteCustomEx(existing) }}>{t('Delete exercise')}</Button></>}
   </>
 }
-export const customExSheet = (existing, onDone, prefill) => ui().openSheet(close => <CustomExForm existing={existing} prefill={prefill} onDone={onDone} close={close} />)
+export const customExSheet = (existing, onDone, prefill, base) => ui().openSheet(close => <CustomExForm existing={existing} prefill={prefill} base={base} onDone={onDone} close={close} />)
+export const variantSheet = (ex, onDone) => customExSheet(null, onDone, ex.n + ' — ', ex)
 
 export function deleteCustomEx(ex, afterDelete) {
   if (S().active?.entries.some(e => e.id === ex.id)) { toast(t('Finish your current workout first')); return }
@@ -418,11 +423,10 @@ function ExercisePicker({ onPick, close }) {
   const [bp, setBp] = useState('')          // '' = all, '★' = chosen, else a body part
   const [eq, setEq] = useState('')          // '' = any equipment
   const [shown, setShown] = useState(50)
-  const ql = q.toLowerCase().trim()
+  const words = queryWords(q)
   const all = allExercises(st)
-  let base = all.filter(e =>
-    (bp === '★' ? usage[e.id] : (!bp || e.bp === bp)) &&
-    (!ql || e.n.toLowerCase().includes(ql) || e.tg.includes(ql) || e.eq.includes(ql) || (e.desc || '').toLowerCase().includes(ql)))
+  let base = byNameHit(all.filter(e =>
+    (bp === '★' ? usage[e.id] : (!bp || e.bp === bp)) && matchesQuery(e, words)), words)
   if (bp === '★') base = [...base].sort((a, b) => (usage[b.id] - usage[a.id]) || (a.n < b.n ? -1 : 1))
   const eqOpts = equipmentOf(base)
   // Drop the equipment filter if the search narrowed it away, so you never hit a dead end.
@@ -487,7 +491,7 @@ function ProgressionFields({ ex, mode, c, setC, routine, unit }) {
   </>
 }
 
-function ExConfig({ ex, existing, onSave, onDelete, close, routine }) {
+function ExConfig({ ex, existing, onSave: onSaveRaw, onDelete, close, routine }) {
   const st = useStore(s => s.S)
   const cardio = isCardio(ex.id)
   const [c, setC] = useState(existing || defaultConfig(ex.id))
@@ -499,8 +503,9 @@ function ExConfig({ ex, existing, onSave, onDelete, close, routine }) {
   const perSide = isPerSide(c)
   // Keep whatever the other mode already had (sets, weight) and fill only what is missing.
   const setMode = m => setC(x => ({ ...defaultConfig(ex.id, m), ...x, mode: m }))
-  const save = () => {
+  const save = (over = {}) => {
     close()
+    const onSave = o => onSaveRaw({ ...o, ...over })
     const sets = Math.max(1, Math.round(c.sets) || (cardio ? 1 : 3))
     // Only carry progression settings that differ from the inherited default, so a plan file
     // stays readable and "follow the routine" keeps meaning exactly that.
@@ -577,7 +582,9 @@ function ExConfig({ ex, existing, onSave, onDelete, close, routine }) {
         subtitle={bw ? t('No weight to enter — just log the reps.') : t('Ask for a weight on every set.')}>
         <Switch checked={bw} onChange={v => setC(x => ({ ...x, bodyweight: v, weight: v ? 0 : x.weight }))} />
       </Row>
-      {mode === 'reps' && <Row icon="shuffle" iconTint="var(--blue)" title={t('Reps per side')}
+      {/* Superseded by Left/Right set types in the workout — kept only so a plan that already
+          uses it can still switch it off. */}
+      {mode === 'reps' && perSide && <Row icon="shuffle" iconTint="var(--blue)" title={t('Reps per side')}
         subtitle={perSide ? t('You still log the total: {0} is {1} per side.', c.reps || 0, fmtNum(sideReps(c.reps))) : t('For lunges, single-arm rows and the like.')}>
         {/* Turning it on rounds the target up to an even number, since half of an odd
             total is a rep one side does not get. */}
@@ -621,7 +628,10 @@ function ExConfig({ ex, existing, onSave, onDelete, close, routine }) {
         value={c.notes || ''} onChange={e => setC(x => ({ ...x, notes: e.target.value }))} />
     </div>
     <ProgressionFields ex={ex} mode={mode} c={c} setC={setC} routine={routine} unit={st.unit} />
-    <Button variant="primary" onClick={save}>{existing ? t('Save') : t('Add to routine')}</Button>
+    <Button variant="primary" onClick={() => save()}>{existing ? t('Save') : t('Add to routine')}</Button>
+    {/* Same movement, different execution (a 2 s pause, a slow tempo): tracked as its own
+        exercise so its weights never mix with the plain version's. */}
+    {existing && onDelete && <><div style={{ height: 8 }} /><Button icon="clipboard" onClick={() => variantSheet(ex, v => v && save({ id: v.id }))}>{t('Track as a separate variant')}</Button></>}
     {ex.custom && <><div style={{ height: 8 }} /><Button icon="pencil" onClick={() => { close(); customExSheet(ex) }}>{t('Edit or delete this exercise')}</Button></>}
     {onDelete && <><div style={{ height: 8 }} /><Button variant="danger" onClick={() => { close(); onDelete() }}>{t('Remove from routine')}</Button></>}
   </>
@@ -739,19 +749,48 @@ function DayOverride({ iso, close }) {
   const weeklyR = st.routines.find(r => r.id === weekFor(st, iso)[wd])
   const hasOvr = st.dayPlan[iso] !== undefined
   const effId = effectiveRoutineId(st, iso)
+  const isToday = iso === todayISO()
   const set = v => {
     update(s => { if (!v) delete s.dayPlan[iso]; else s.dayPlan[iso] = v })
     close()
     toast(v === '' ? t('Back to weekly plan') : v === 'rest' ? t('{0} set to rest', fmtDate(iso)) : t('{0} planned for {1}', (st.routines.find(r => r.id === v) || {}).name, fmtDate(iso)))
   }
+  // A one-off routine just for this day: built like any other, kept out of the groups, and
+  // cleared once the day has passed (see ensureGroups).
+  const temporary = () => {
+    const r = { id: uid(), name: t('Temporary — {0}', fmtDate(iso)), emoji: DEFAULT_GLYPH, ex: [], temp: iso }
+    update(s => { s.routines.push(r); s.dayPlan[iso] = r.id })
+    close(); nav('/plan/r/' + r.id)
+  }
+  const cur = programFor(st, iso)
+  const own = cur ? groupRoutines(st, cur.id) : listedRoutines(st)
+  const others = listedRoutines(st).filter(r => !own.includes(r))
+  const tempR = st.routines.find(r => r.temp && r.id === st.dayPlan[iso])
+  const row = r => <div key={r.id} className="item" onClick={() => set(r.id)}>
+    <span className="lrow-i"><Icon name={glyphOf(r.emoji)} /></span>
+    <div className="grow"><div className="tt">{r.name}</div><div className="ss">{exCount(r.ex.length)}</div></div>
+    {effId === r.id && <Icon name="check" className="accent" />}</div>
   return <>
     <h3>{fmtDate(iso, true)}</h3>
     <div className="muted small" style={{ marginBottom: 12 }}>{t('Weekly plan:')} {weeklyR ? weeklyR.name : t('Rest')}{hasOvr && <span style={{ color: 'var(--orange)' }}> · {t('changed for this day')}</span>}<br />{t('Sick, missed a day or want a different session? Pick what to train instead.')}</div>
     <div className="list">
-      {st.routines.map(r => <div key={r.id} className="item" onClick={() => set(r.id)}>
-        <span className="lrow-i"><Icon name={glyphOf(r.emoji)} /></span>
-        <div className="grow"><div className="tt">{r.name}</div><div className="ss">{exCount(r.ex.length)}</div></div>
-        {effId === r.id && <Icon name="check" className="accent" />}</div>)}
+      {isToday && <div className="item" onClick={() => { close(); startFlow(null) }}>
+        <span className="lrow-i" style={{ background: 'var(--orange)' }}><Icon name="shuffle" /></span>
+        <div className="grow"><div className="tt">{t('Build it as you go')}</div><div className="ss">{t('Start now, add exercises as you train — save it as a routine at the end')}</div></div>
+        <Icon name="chevronRight" className="chev" /></div>}
+      {tempR ? <div className="item" onClick={() => { close(); nav('/plan/r/' + tempR.id) }}>
+        <span className="lrow-i" style={{ background: 'var(--purple)' }}><Icon name="pencil" /></span>
+        <div className="grow"><div className="tt">{tempR.name}</div><div className="ss">{t('Edit the temporary routine')} · {exCount(tempR.ex.length)}</div></div>
+        <Icon name="check" className="accent" /></div>
+      : <div className="item" onClick={temporary}>
+        <span className="lrow-i" style={{ background: 'var(--purple)' }}><Icon name="clipboard" /></span>
+        <div className="grow"><div className="tt">{t('Temporary routine')}</div><div className="ss">{t('Build a routine just for this day — it is not added to your groups')}</div></div>
+        <Icon name="plus" className="chev" /></div>}
+    </div>
+    {own.length > 0 && <><h4 className="sec">{cur ? cur.name : t('Routines')}</h4><div className="list">{own.map(row)}</div></>}
+    {others.length > 0 && <><h4 className="sec">{t('From other groups')}</h4><div className="list">{others.map(row)}</div></>}
+    <div style={{ height: 10 }} />
+    <div className="list">
       <div className="item" onClick={() => set('rest')}><span className="lrow-i" style={{ background: 'var(--surface-3)' }}><Icon name="moon" /></span><div className="grow"><div className="tt">{t('Rest / skip this day')}</div></div>{effId === null && <Icon name="check" className="accent" />}</div>
       {hasOvr && <div className="item" onClick={() => set('')}><span className="lrow-i" style={{ background: 'var(--surface-3)' }}><Icon name="reset" /></span><div className="grow"><div className="tt">{t('Back to weekly plan')}</div></div></div>}
     </div>
@@ -772,16 +811,22 @@ function DayAssign({ day, programId, close }) {
     })
     close()
   }
+  // The group's own routines first; the rest are still reachable, folded under their groups.
+  const own = prog ? groupRoutines(st, prog.id) : listedRoutines(st)
+  const others = prog ? listedRoutines(st).filter(r => r.group !== prog.id) : []
+  const row = r => <div key={r.id} className="item" onClick={() => set(r.id)}>
+    <span className="lrow-i"><Icon name={glyphOf(r.emoji)} /></span>
+    <div className="grow"><div className="tt">{r.name}</div><div className="ss">{exCount(r.ex.length)}</div></div>
+    {week[day] === r.id && <Icon name="check" className="accent" />}</div>
   return <>
     <h3>{t(DAYN[day])}</h3>
     {prog && <div className="muted small" style={{ marginBottom: 12 }}>{prog.name}</div>}
     <div className="list">
       <div className="item" onClick={() => set('')}><span className="lrow-i" style={{ background: 'var(--surface-3)' }}><Icon name="moon" /></span><div className="grow"><div className="tt">{t('Rest day')}</div></div>{!week[day] && <Icon name="check" className="accent" />}</div>
-      {st.routines.map(r => <div key={r.id} className="item" onClick={() => set(r.id)}>
-        <span className="lrow-i"><Icon name={glyphOf(r.emoji)} /></span>
-        <div className="grow"><div className="tt">{r.name}</div><div className="ss">{exCount(r.ex.length)}</div></div>
-        {week[day] === r.id && <Icon name="check" className="accent" />}</div>)}
+      {own.map(row)}
     </div>
+    {!own.length && <div className="small dim" style={{ margin: '10px 2px' }}>{t('No routines in this group yet.')}</div>}
+    {others.length > 0 && <><h4 className="sec">{t('From other groups')}</h4><div className="list">{others.map(row)}</div></>}
   </>
 }
 export const dayAssignSheet = (day, programId) => ui().openSheet(close => <DayAssign day={day} programId={programId} close={close} />)
@@ -810,6 +855,48 @@ function ExerciseTrend({ st, w, e }) {
   </div>
 }
 
+// The whole session against earlier runs of the same routine (finish screen).
+function RoutineTrend({ w }) {
+  const st = useStore(s => s.S)
+  const tr = routineTrend(st, w.id)
+  if (!tr.metric) return null
+  const v = exerciseVerdicts(st, w)
+  const label = tr.metric === 'vol' ? t('Session volume') : t('Total reps')
+  if (tr.verdict === 'first') return <div className="trend" style={{ textAlign: 'left' }}>
+    <div className="trend-h dim">{label}</div>
+    <div className="small dim">{t('First time with this routine — the next session will show a trend.')}</div>
+  </div>
+  const pct = Math.round(tr.delta * 1000) / 10
+  const base = Math.min(BASELINE, tr.points.length - 1)
+  return <div className="trend" style={{ textAlign: 'left' }}>
+    <div className="row between trend-h">
+      <span className="dim">{label}</span>
+      <span className={'trend-v ' + tr.verdict}><Icon name={TREND_ICON[tr.verdict]} />{t(TREND_WORD[tr.verdict])} {(pct > 0 ? '+' : '') + fmtNum(pct)}%</span>
+    </div>
+    <div className="chart"><LineChart points={tr.points} h={110} unit={tr.metric === 'vol' ? st.unit : t('reps')} color={tr.verdict === 'down' ? 'var(--red)' : 'var(--acc)'} /></div>
+    <div className="small dim">{t(base === 1 ? 'Compared with the previous session' : 'Compared with the average of the last {0} sessions', base)}</div>
+    {(v.up + v.down) > 0 && <div className="small" style={{ marginTop: 4 }}>
+      {v.up > 0 && <span className="trend-v up" style={{ marginRight: 10 }}><Icon name="arrowUp" />{t(v.up === 1 ? '{0} exercise improving' : '{0} exercises improving', v.up)}</span>}
+      {v.down > 0 && <span className="trend-v down"><Icon name="arrowDown" />{t(v.down === 1 ? '{0} exercise declining' : '{0} exercises declining', v.down)}</span>}
+    </div>}
+  </div>
+}
+
+// A freestyle session saved as a routine, in the group in use — "build it as you go".
+export function saveAsRoutine(w, after) {
+  const r = { id: uid(), name: t('Routine {0}', fmtDate(w.d)), emoji: DEFAULT_GLYPH, ex: [] }
+  w.entries.forEach(e => {
+    const n = e.sets.filter(x => x.done && isWorking(x)).length || 1
+    r.ex.push({ ...(e.target || defaultConfig(e.id)), id: e.id, sets: n })
+  })
+  update(s => {
+    s.routines.push(r)
+    const x = s.workouts.find(x => x.id === w.id); if (x) { x.routineId = r.id; x.name = r.name }
+  })
+  toast(t('Saved as “{0}” — rename it in Plan', r.name))
+  after && after(r)
+}
+
 function WorkoutDetail({ w, close }) {
   const st = useStore(s => s.S)
   return <>
@@ -820,7 +907,7 @@ function WorkoutDetail({ w, close }) {
       return <div key={i} className="row" style={{ marginBottom: 12, alignItems: 'flex-start' }}>
         {ex && <Thumb ex={ex} />}
         <div className="grow"><div className="tt capitalize" style={{ fontWeight: 600 }}>{ex ? ex.n : (e.n || e.id)} {w.prs && w.prs.includes(e.id) && <span className="pr"><Icon name="trophy" />PR</span>}</div>
-          <div className="ss">{e.sets.filter(s => s.done).map(s => setLabel(e.id, s, e.target)).join('  ·  ') || t('no sets')}</div>
+          <div className="ss">{e.sets.filter(s => s.done).map(s => setText(e.id, s, e.target)).join('  ·  ') || t('no sets')}</div>
           <ExerciseTrend st={st} w={w} e={e} /></div>
       </div>
     })}
@@ -916,7 +1003,9 @@ function TopWeight({ entryIdx, close }) {
   const ex = entry && EXIDX[entry.id]
   const maxSet = entry ? Math.max(0, ...entry.sets.filter(s => s.done).map(s => s.w || 0)) : 0
   const prevBest = entry ? Math.max((st.exWeights[entry.id] || {}).w || 0, bestWeightFor(st, entry.id)) : 0
-  const [v, setV] = useState(entry ? (Math.max(maxSet, prevBest) || entry.target.weight || 0) : 0)
+  // This session's top set, not the all-time best — confirming must never quietly raise next
+  // time's weight above what was actually lifted today.
+  const [v, setV] = useState(entry ? (maxSet || prevBest || entry.target.weight || 0) : 0)
   useEffect(() => { if (!entry) close() }, [!entry])
 
   const units = supersetUnits(A ? A.entries : [])
@@ -931,18 +1020,17 @@ function TopWeight({ entryIdx, close }) {
     if (!isFinite(n) || n < 0) { toast(t('Enter a valid weight')); return }
     update(s => {
       s.active.entries[entryIdx].topW = n
-      const cur = s.exWeights[entry.id]
-      s.exWeights[entry.id] = { w: Math.max(n, cur ? cur.w : 0), d: todayISO() }
+      s.exWeights[entry.id] = { w: n, d: todayISO() }
     })
     close()
     if (advance && unitDone) {
       if (isLastUnit) workoutCompleteSheet()               // whole workout done → finish/continue prompt
       else update(s => { s.active.cur = units[unitIdx + 1][0] })
-    } else toast(t('Tracked — next time starts at {0}', fmtNum(S().exWeights[entry.id].w) + ' ' + st.unit))
+    } else toast(t('Saved: {0}', fmtNum(n) + ' ' + st.unit))
   }
   return <>
     <h3 className="capitalize row" style={{ gap: 8 }}><Icon name="checkCircle" style={{ color: 'var(--acc)' }} />{t('{0} done', ex.n)}</h3>
-    <div className="muted small">{t('Confirm the weight you worked with — your highest becomes the default next time.')}{!unitDone && unit.length > 1 ? ' ' + t('Then finish the superset partner.') : ''}</div>
+    <div className="muted small">{t('Confirm the weight you worked with today.')}{!unitDone && unit.length > 1 ? ' ' + t('Then finish the superset partner.') : ''}</div>
     <WeightInput value={v} setValue={setV} unit={st.unit} />
     <div style={{ height: 10 }} />
     {prevBest > 0 ? <div className="small dim" style={{ textAlign: 'center', marginBottom: 12 }}>{t('Previous best:')} {fmtNum(prevBest)} {st.unit}{maxSet > prevBest && <span style={{ color: 'var(--yellow)' }}> — {t('new record!')}</span>}</div> : <div style={{ height: 4 }} />}
@@ -969,6 +1057,7 @@ export const workoutCompleteSheet = () => ui().openSheet(close => <WorkoutComple
 
 function FinishSummary({ w, prs, e1prs = [], close }) {
   const st = useStore(s => s.S)
+  const [saved, setSaved] = useState(false)
   return <div style={{ textAlign: 'center', padding: '8px 0' }}>
     <div style={{ fontSize: 44, display: 'flex', justifyContent: 'center', color: 'var(--acc)' }}><Icon name="trophy" /></div>
     <h3 style={{ margin: '8px 0' }}>{t('Workout complete!')}</h3>
@@ -982,12 +1071,15 @@ function FinishSummary({ w, prs, e1prs = [], close }) {
       {prs.map(id => <div key={id} className="small accent capitalize row" style={{ gap: 5 }}><Icon name="trophy" style={{ fontSize: 13 }} />{t('New PR:')} {(EXIDX[id] || {}).n || id}</div>)}
       {e1prs.map(p => <div key={p.id} className="small accent capitalize row" style={{ gap: 5 }}><Icon name="chartLine" style={{ fontSize: 13 }} />{t('Best estimated 1RM:')} {(EXIDX[p.id] || {}).n || p.id} · {fmtNum(p.est)} {st.unit}</div>)}
     </div>}
-    <h4 className="sec" style={{ textAlign: 'left' }}>{t('What you just trained')}</h4>
-    <BodyMap load={loadOfWorkouts([w])} body={st.body} />
-    <div style={{ height: 14 }} />
+    <RoutineTrend w={w} />
+    <div style={{ height: 12 }} />
     <Button variant="primary" onClick={() => { close(); nav('/home') }}>{t('Nice!')}</Button>
     <div style={{ height: 8 }} />
-    <Button icon="chartLine" onClick={() => { close(); nav('/home'); workoutDetailSheet(w) }}>{t('Workout details & progress')}</Button>
+    <Button icon="chartLine" onClick={() => { close(); nav('/home'); workoutDetailSheet(st.workouts.find(x => x.id === w.id) || w) }}>{t('Details per exercise')}</Button>
+    {!w.routineId && !saved && w.entries.length > 0 && <><div style={{ height: 8 }} />
+      <Button icon="plus" onClick={() => saveAsRoutine(w, () => setSaved(true))}>{t('Save as routine')}</Button></>}
+    <h4 className="sec" style={{ textAlign: 'left' }}>{t('What you just trained')}</h4>
+    <BodyMap load={loadOfWorkouts([w])} body={st.body} />
   </div>
 }
 export function finishWorkout() {
@@ -1025,7 +1117,9 @@ function doFinishWorkout() {
   update(s => {
     w.entries.forEach(e => {
       const mx = Math.max(0, ...e.sets.filter(x => x.done).map(x => x.w || 0), e.topW || 0)
-      if (mx > 0) { const cur = s.exWeights[e.id]; if (!cur || mx > cur.w) s.exWeights[e.id] = { w: mx, d: w.d } }
+      // The latest working weight (confirmed, else the top set) — not a running maximum, so a
+      // lighter day or a deload is what the next session starts from.
+      if (mx > 0) s.exWeights[e.id] = { w: e.topW || mx, d: w.d }
     })
     s.workouts.push(w)
     s.active = null

@@ -94,6 +94,27 @@ const effortTail = s => {
   return k ? ` (${EFFORT[k].hd} ${fmtNum(s[k])})` : ''
 }
 
+// Set types (tap the set number during a workout). A plain set has no `k` and is numbered;
+// the others show a coloured letter instead:
+//   w — warm-up    d — drop set (stripping)    l / r — left / right side of unilateral work
+// Warm-ups and drop sets are not "working" sets: progression and the trend charts judge a
+// session on its working sets only, so a lighter drop set can never read as a missed rep or
+// a weaker session. Left/right sets are working sets — they are the exercise.
+export const SET_KINDS = ['w', 'd', 'l', 'r']
+export const KIND_LETTER = { w: 'W', d: 'D', l: 'L', r: 'R' }
+export const KIND_NAME = { w: 'Warm-up', d: 'Drop set', l: 'Left', r: 'Right' }
+export const isWorking = s => !s || !s.k || s.k === 'l' || s.k === 'r'
+// The badge on a set: its number among the plain sets, or its type letter.
+export function setBadge(sets, i) {
+  const s = sets[i]
+  if (s && s.k && KIND_LETTER[s.k]) return t(KIND_LETTER[s.k])
+  let n = 0
+  for (let j = 0; j <= i; j++) if (!sets[j].k) n++
+  return String(n)
+}
+// setLabel with the type letter in front ("D 40×8") — for history lines that list sets.
+export const setText = (id, s, cfg) => (s.k && KIND_LETTER[s.k] ? t(KIND_LETTER[s.k]) + ' ' : '') + setLabel(id, s, cfg)
+
 // One-line summary of a logged set. `cfg` carries the mode when the caller has it (a routine
 // entry or a workout entry); passing an id alone keeps the old body-part behaviour.
 export function setLabel(id, s, cfg) {
@@ -209,13 +230,35 @@ export function buildSets(S, cfg) {
     }
     return sets
   }
-  const conf = S.exWeights[cfg.id]
-  for (let i = 0; i < n; i++) {
-    const prev = prevAt(i)
-    const usable = prev && prev.r > 0 ? prev : null
-    const w = conf && conf.w > 0 ? conf.w : (usable ? usable.w : cfg.weight)
-    sets.push({ w, r: usable ? usable.r : cfg.reps, done: false })
+  // Last time's layout is kept when it used set types — the warm-up, the drop set at the end,
+  // the left/right pairs — so a structure you built once comes back by itself. Plain sets are
+  // topped up to the plan's count, never trimmed.
+  const layout = last && last.sets.some(s => s.k) ? last.sets.map(s => s.k || '') : []
+  // Missing plain sets go in after the last working set, ahead of a trailing drop set.
+  const work = k => !k || k === 'l' || k === 'r'
+  while (layout.filter(work).length < n) {
+    let at = layout.length
+    while (at > 0 && !work(layout[at - 1])) at--
+    layout.splice(at > 0 ? at : layout.length, 0, '')
   }
+  const conf = S.exWeights[cfg.id]
+  const seen = {}
+  layout.forEach(k => {
+    // The same set last time: the n-th set of this type (the 2nd drop set ↔ the 2nd drop set),
+    // else — a set the plan added — last time's final working set.
+    const j = seen[k] = (seen[k] || 0) + 1
+    const same = last ? last.sets.filter(x => (x.k || '') === k)[j - 1] : null
+    const prev = same || (last ? [...last.sets].reverse().find(isWorking) : null)
+    const usable = prev && prev.r > 0 ? prev : null
+    // Weight: what you actually lifted at this position last time — a lighter last set stays
+    // lighter instead of everything jumping to your all-time best. Reps: the routine's target
+    // (that is the number to reach); a set to failure or a warm-up/drop set has none, so
+    // last time's count is the starting point there.
+    const w = usable ? usable.w : (conf && conf.w > 0 ? conf.w : cfg.weight)
+    const ownTarget = !k || k === 'l' || k === 'r'
+    const r = ownTarget && cfg.reps > 0 ? cfg.reps : (usable ? usable.r : cfg.reps)
+    sets.push({ w, r, done: false, ...(k ? { k } : {}) })
+  })
   return sets
 }
 export function workoutVolume(w) {

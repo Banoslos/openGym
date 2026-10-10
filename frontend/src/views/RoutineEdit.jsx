@@ -2,10 +2,10 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useStore } from '../store/useStore.js'
 import { exOr } from '../lib/exercises.js'
-import { uid } from '../lib/format.js'
+import { uid, fmtDate } from '../lib/format.js'
 import { t } from '../lib/i18n.js'
 import { supersetUnits, cleanupSg, exLine } from '../lib/history.js'
-import { unschedule } from '../lib/programs.js'
+import { unschedule, programFor } from '../lib/programs.js'
 import { Thumb } from '../components/Media.jsx'
 import { glyphPicker, exercisePicker, exConfigSheet, confirmSheet } from '../sheets.jsx'
 import Icon from '../components/Icon.jsx'
@@ -24,6 +24,7 @@ export default function RoutineEdit() {
   useEffect(() => { if (!r) nav('/plan') }, [!!r])
   if (!r) return null
 
+  const back = () => nav(r.group && (S.programs || []).some(p => p.id === r.group) ? '/plan/g/' + r.group : r.temp ? '/home' : '/plan')
   const edit = fn => update(s => { fn(s.routines.find(x => x.id === id).ex) })
   const move = (i, dir) => edit(ex => { const j = i + dir; if (j < 0 || j >= ex.length) return;[ex[i], ex[j]] = [ex[j], ex[i]]; cleanupSg(ex) })
   const toggleLink = i => edit(ex => {
@@ -40,7 +41,7 @@ export default function RoutineEdit() {
 
   return <div className="narrow">
     <div className="hdr">
-      <button className="iconbtn" onClick={() => nav('/plan')} aria-label={t('Plan')}><Icon name="chevronLeft" /></button>
+      <button className="iconbtn" onClick={back} aria-label={t('Plan')}><Icon name="chevronLeft" /></button>
       <div style={{ flex: 1, margin: '0 12px' }}>
         <input className="input" defaultValue={r.name} style={{ fontWeight: 600, fontSize: 20, letterSpacing: '-.021em' }}
           onChange={e => update(s => { s.routines.find(x => x.id === id).name = e.target.value.trim() || t('Routine') })} />
@@ -48,6 +49,19 @@ export default function RoutineEdit() {
       <button className="iconbtn" aria-label={t('Pick an icon')} onClick={() => glyphPicker(r.emoji, g => update(s => { s.routines.find(x => x.id === id).emoji = g }))}><Icon name={glyphOf(r.emoji)} /></button>
     </div>
 
+    {r.temp ? <div className="card" style={{ borderColor: 'var(--purple)', marginBottom: 14 }}>
+      <div className="small" style={{ marginBottom: 10 }}>{t('Temporary routine for {0} — it is removed after that day.', fmtDate(r.temp, true))}</div>
+      <Button size="sm" variant="tinted" icon="folder" onClick={() => update(s => {
+        const x = s.routines.find(y => y.id === id)
+        x.group = (programFor(s, x.temp) || {}).id   // ensureGroups files it if there is none yet
+        if (x.name === t('Temporary — {0}', fmtDate(x.temp))) x.name = t('Routine {0}', fmtDate(x.temp))
+        delete x.temp
+      })}>{t('Keep it — add to my group')}</Button>
+    </div> : (S.programs || []).length > 1 && <div className="sect-b" style={{ marginBottom: 10 }}>
+      <SelectRow icon="folder" title={t('Group')} sheetTitle={t('Move to group')} value={r.group || ''}
+        options={S.programs.map(p => ({ value: p.id, label: p.name }))}
+        onChange={v => update(s => { s.routines.find(x => x.id === id).group = v })} />
+    </div>}
     <div className="sect-b" style={{ marginBottom: 16 }}>
       <SelectRow icon="chartLine" title={t('Progression')} sheetTitle={t('Progression')}
         value={r.prog || 'linear'} onChange={v => update(s => { s.routines.find(x => x.id === id).prog = v })}
@@ -105,7 +119,7 @@ export default function RoutineEdit() {
           unschedule(s, id)
           Object.keys(s.dayPlan).forEach(k => { if (s.dayPlan[k] === id) delete s.dayPlan[k] })
         })
-        nav('/plan')
+        back()
       }
     })}>{t('Delete routine')}</Button>
   </div>

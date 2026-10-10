@@ -370,9 +370,26 @@ describe('buildSets', () => {
       .toEqual([{ w: 40, r: 8, done: false }])
   })
 
-  it('still prefers the confirmed working weight for reps sets', () => {
-    const S = { exWeights: { [LIFT]: { w: 75 } }, workouts: [{ d: '2026-01-01', entries: [{ id: LIFT, sets: [{ w: 60, r: 10, done: true }] }] }] }
-    expect(buildSets(S, { id: LIFT, sets: 1, reps: 8, weight: 50 })).toEqual([{ w: 75, r: 10, done: false }])
+  it("takes last time's weight per set and the routine's target reps", () => {
+    const S = { exWeights: { [LIFT]: { w: 75 } }, workouts: [{ d: '2026-01-01', entries: [{ id: LIFT, sets: [{ w: 60, r: 10, done: true }, { w: 57.5, r: 9, done: true }] }] }] }
+    expect(buildSets(S, { id: LIFT, sets: 2, reps: 8, weight: 50 })).toEqual([{ w: 60, r: 8, done: false }, { w: 57.5, r: 8, done: false }])
+  })
+
+  it('falls back to the confirmed working weight with no history', () => {
+    expect(buildSets({ workouts: [], exWeights: { [LIFT]: { w: 75 } } }, { id: LIFT, sets: 1, reps: 8, weight: 50 })).toEqual([{ w: 75, r: 8, done: false }])
+  })
+
+  it("keeps last time's set types and their numbers", () => {
+    const S = { exWeights: {}, workouts: [{ d: '2026-01-01', entries: [{ id: LIFT, sets: [
+      { w: 20, r: 12, k: 'w', done: true }, { w: 60, r: 8, done: true }, { w: 60, r: 8, done: true }, { w: 40, r: 10, k: 'd', done: true }] }] }] }
+    expect(buildSets(S, { id: LIFT, sets: 3, reps: 8, weight: 50 })).toEqual([
+      { w: 20, r: 12, k: 'w', done: false }, { w: 60, r: 8, done: false }, { w: 60, r: 8, done: false },
+      { w: 60, r: 8, done: false }, { w: 40, r: 10, k: 'd', done: false }])
+  })
+
+  it("uses last time's reps for a set to failure", () => {
+    const S = { exWeights: {}, workouts: [{ d: '2026-01-01', entries: [{ id: LIFT, sets: [{ w: 60, r: 11, done: true }] }] }] }
+    expect(buildSets(S, { id: LIFT, sets: 1, reps: 0, weight: 50 })).toEqual([{ w: 60, r: 11, done: false }])
   })
 })
 

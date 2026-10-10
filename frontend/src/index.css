@@ -707,6 +707,7 @@ h4.sec{
 .center{
   position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
   width:min(84vw,300px);background:var(--bg-el);border-radius:var(--r-lg);padding:20px;
+  max-height:calc(100dvh - 40px - var(--sab, 0px));overflow-y:auto;overscroll-behavior:contain;
   box-shadow:0 20px 60px -12px rgba(0,0,0,.5);
   animation:pop .28s var(--ease);
 }
@@ -978,3 +979,14 @@ h4.sec{
 .trend-v.down{color:var(--red)}
 .trend-v.steady{color:var(--label-2)}
 .trend-first{margin-top:6px}
+/* set types: a lettered badge in its own colour instead of the set number */
+.setrow .n.k-w,.ktype.k-w b{color:var(--orange);background:color-mix(in srgb,var(--orange) 18%,transparent)}
+.setrow .n.k-d,.ktype.k-d b{color:var(--purple);background:color-mix(in srgb,var(--purple) 20%,transparent)}
+.setrow .n.k-l,.setrow .n.k-r,.ktype.k-l b,.ktype.k-r b{color:var(--blue);background:color-mix(in srgb,var(--blue) 18%,transparent)}
+.setrow .n.k-l,.setrow .n.k-r{font-size:10.5px;font-weight:700}
+.setrow.done .n[class*="k-"]{color:var(--on-acc);background:var(--acc)}
+.ktypes{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.ktype{display:flex;align-items:center;gap:7px;padding:7px 8px;border-radius:10px;border:0;background:var(--surface-3);color:var(--label);font-size:13px;text-align:left}
+.ktype b{width:22px;height:22px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;background:var(--surface);color:var(--label-2)}
+.ktype.on{box-shadow:inset 0 0 0 2px var(--acc)}
+.date-in{flex:none;width:150px;padding:8px 10px;font-size:15px}

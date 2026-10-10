@@ -51,3 +51,19 @@ describe('trend', () => {
     expect(tr.points.map(p => p.id)).toEqual(['b', 'c'])
   })
 })
+
+import { routineTrend, sessionScore } from './trend.js'
+describe('routineTrend', () => {
+  const W = (id, d, w, extra = []) => ({ id, d, routineId: 'A', entries: [{ id: 'x', sets: [{ w, r: 10, done: true }, ...extra] }] })
+  it('scores working-set volume and compares with earlier sessions of the same routine', () => {
+    const S = { workouts: [W('1', '2026-01-01', 50), W('2', '2026-01-03', 50), { ...W('o', '2026-01-04', 10), routineId: 'B' }, W('3', '2026-01-05', 60, [{ w: 5, r: 10, k: 'd', done: true }])] }
+    const tr = routineTrend(S, '3')
+    expect(tr.metric).toBe('vol')
+    expect(tr.points.map(p => p.y)).toEqual([500, 500, 600])
+    expect(tr.verdict).toBe('up')
+    expect(tr.delta).toBeCloseTo(0.2, 3)
+  })
+  it('falls back to reps for a routine with no load', () => {
+    expect(sessionScore({ entries: [{ sets: [{ r: 12, done: true }, { r: 10, done: true }] }] }, 'reps')).toBe(22)
+  })
+})

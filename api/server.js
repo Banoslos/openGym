@@ -121,6 +121,12 @@ function weekFor(S, iso) {
     const k = Math.floor(Math.round((mondayMs(iso) - mondayMs(S.programFrom)) / (7 * 864e5)) / S.rotate);
     i = (((i + k) % ps.length) + ps.length) % ps.length;
   }
+  // A group past its end date hands over to the next one still running, or schedules nothing.
+  const expired = p => !!(p && p.until && iso > p.until);
+  if (expired(ps[i])) {
+    for (let j = 1; j < ps.length; j++) { const q = ps[(i + j) % ps.length]; if (!expired(q)) return q.week; }
+    return {};
+  }
   return ps[i].week;
 }
 // Computes "now" in an arbitrary IANA zone (e.g. "Europe/Lisbon") instead of the server's own —

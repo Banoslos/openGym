@@ -26,6 +26,30 @@ export function registerCustom(list) {
 // Full searchable catalogue — customs first so your own exercises are easy to find.
 export const allExercises = st => [...(st.customEx || []), ...EXDB]
 
+// Search by keywords in any order: "dumbell bench" finds "dumbbell incline bench press".
+// Every word has to appear somewhere — name, target, equipment, body part (also in the UI
+// language) or description — but in any position and with anything in between. Text is
+// folded first so the usual spelling noise doesn't matter: case, hyphens ("push up" =
+// "push-up" = "pushup"), doubled letters ("dumbell" = "dumbbell") and a plural "s".
+const fold = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^a-z0-9]+/g, ' ').replace(/(.)\1+/g, '$1').trim()
+export function queryWords(q) {
+  return fold(q).split(' ').filter(Boolean).map(w => (w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w))
+}
+export function matchesQuery(e, words) {
+  if (!words.length) return true
+  const hay = fold([e.n, e.tg, e.eq, e.bp, t(e.tg || ''), t(e.eq || ''), t(e.bp || ''), e.desc].join(' '))
+  const glued = hay.replace(/ /g, '')
+  return words.every(w => hay.includes(w) || glued.includes(w))
+}
+// Exercises whose *name* holds every word come first — "bench" should list bench presses
+// before a row whose description happens to mention a bench. Stable, so order is otherwise kept.
+export function byNameHit(list, words) {
+  if (!words.length) return list
+  const inName = e => { const n = fold(e.n), g = n.replace(/ /g, ''); return words.every(w => n.includes(w) || g.includes(w)) }
+  return [...list.filter(inName), ...list.filter(e => !inName(e))]
+}
+
 // Media normally sits next to the app (img/ and gif/, mounted into the web container).
 // A build can point them somewhere else — the demo build pulls them off a CDN instead of
 // shipping ~140 MB of images into the deployment.

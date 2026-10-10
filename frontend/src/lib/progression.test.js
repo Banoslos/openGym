@@ -488,3 +488,30 @@ describe('add reps policy', () => {
     expect([p.kind, p.reps]).toEqual(['hold', 12])
   })
 })
+
+describe('lighter sets and set types', () => {
+  const T = { sets: 3, reps: 5 }
+  it('a working set below the top weight is a miss, so the weight does not go up', () => {
+    const entry = { id: LIFT, target: T, sets: [{ w: 60, r: 5, done: true }, { w: 60, r: 5, done: true }, { w: 57.5, r: 5, done: true }] }
+    expect(readSession(entry).ok).toBe(false)
+    const S = { unit: 'kg', workouts: [{ d: '2026-01-01', entries: [entry] }] }
+    const p = nextPrescription(S, { id: LIFT, ...T, weight: 60 })
+    expect(p.kind).toBe('hold')
+    expect(p.weight).toBe(60)
+  })
+
+  it('warm-ups and drop sets are not judged', () => {
+    const s = readSession({ id: LIFT, target: T, sets: [
+      { w: 20, r: 12, k: 'w', done: true },
+      { w: 60, r: 5, done: true }, { w: 60, r: 5, done: true }, { w: 60, r: 5, done: true },
+      { w: 40, r: 3, k: 'd', done: true }] })
+    expect(s.ok).toBe(true)
+    expect(s.weight).toBe(60)
+  })
+
+  it('a hold keeps last time\'s per-set weights; an increase overwrites working sets only', () => {
+    const sets = [{ w: 20, r: 12, k: 'w', done: false }, { w: 60, r: 5, done: false }, { w: 57.5, r: 5, done: false }]
+    expect(applyPrescription(sets, { kind: 'hold', weight: 60 })).toEqual(sets)
+    expect(applyPrescription(sets, { kind: 'up', weight: 62.5 }).map(s => s.w)).toEqual([20, 62.5, 62.5])
+  })
+})

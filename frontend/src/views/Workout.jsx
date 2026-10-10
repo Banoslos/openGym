@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore.js'
 import { useUI } from '../store/useUI.js'
 import { exOr } from '../lib/exercises.js'
-import { effectiveRoutine, lastEntryFor, bestWeightFor, buildSets, setsDoneActive, supersetUnits, unitOf, setLabel, modeOf, isBw, isPerSide, sideReps, repStep, EFFORT, effortOf, stepEffort, capEffort, restSecFor, toFailure } from '../lib/history.js'
+import { effectiveRoutine, lastEntryFor, bestWeightFor, buildSets, setsDoneActive, supersetUnits, unitOf, setLabel, modeOf, isBw, isPerSide, sideReps, repStep, EFFORT, effortOf, stepEffort, capEffort, restSecFor, toFailure, setBadge, setText, SET_KINDS, KIND_LETTER, KIND_NAME, isWorking } from '../lib/history.js'
 import { fmtNum, fmtDate, todayISO, exCount, DAYN } from '../lib/format.js'
 import { beep, vibrate } from '../lib/sound.js'
 import { t } from '../lib/i18n.js'
@@ -15,6 +15,7 @@ import Icon from '../components/Icon.jsx'
 import { Button, Check, NumberField, Stepper, TextArea } from '../components/ui.jsx'
 import { nextPrescription, applyPrescription } from '../lib/progression.js'
 import { glyphOf } from '../lib/glyphs.js'
+import { listedRoutines } from '../lib/programs.js'
 
 /* ---------- compact inline popover (issue: rest/setup controls must be visible and editable
    without leaving the screen or interrupting the set — no modal, no navigation). Anchored to a
@@ -33,7 +34,7 @@ function StartChooser() {
   const S = useStore(s => s.S)
   const todayR = effectiveRoutine(S, todayISO())
   const todayOvr = S.dayPlan[todayISO()] !== undefined
-  const others = S.routines.filter(r => r !== todayR)
+  const others = listedRoutines(S).filter(r => r !== todayR)
   return <div className="narrow">
     <div className="hdr"><div><h1>{t('Start workout')}</h1><div className="sub">{t(DAYN[new Date().getDay()])} — {todayR ? t('today is {0}', todayR.name) : t('rest day, but no one’s stopping you')}</div></div></div>
     {todayR && <div className="card" style={{ borderColor: 'var(--acc)' }}>
@@ -217,7 +218,7 @@ function ExerciseBlock({ entryIdx, compact, onToggle, onField, onAddSet, onRemov
         </InlinePopover>}
       </span>
     </div>
-    {last && <div className="small dim" style={{ marginBottom: 4 }}>{t('Last time')} ({fmtDate(last.d)}): {last.sets.map(s => setLabel(entry.id, s, last.target)).join(', ')}</div>}
+    {last && <div className="small dim" style={{ marginBottom: 4 }}>{t('Last time')} ({fmtDate(last.d)}): {last.sets.map(s => setText(entry.id, s, last.target)).join(', ')}</div>}
     {plan && plan.why && plan.kind !== 'off' && <div className={'progline' + (plan.kind === 'deload' ? ' warn' : '')}>
       <Icon name={plan.kind === 'up' ? 'arrowUp' : plan.kind === 'deload' ? 'arrowDown' : 'lightbulb'} />
       <span>{t(...plan.why)}</span>
@@ -229,10 +230,19 @@ function ExerciseBlock({ entryIdx, compact, onToggle, onField, onAddSet, onRemov
         {/* Tap the set number to override rest for just this set — the value the completed-set
             timer actually uses (see restSecFor): this set's own value first, then the
             exercise's, then the app default. A filled dot marks a set that has one. */}
-        <button className={'n' + (s.restSec > 0 ? ' has-rest' : '')} aria-label={t('Rest for this set')}
-          onClick={() => setPopover(p => p === 'set:' + i ? null : 'set:' + i)}>{i + 1}</button>
+        <button className={'n' + (s.restSec > 0 ? ' has-rest' : '') + (s.k ? ' k-' + s.k : '')} aria-label={t('Set type and rest')}
+          onClick={() => setPopover(p => p === 'set:' + i ? null : 'set:' + i)}>{setBadge(entry.sets, i)}</button>
         {popover === 'set:' + i && <InlinePopover onClose={() => setPopover(null)}>
-          <div className="pop-title">{t('Rest after set {0}', i + 1)}</div>
+          {/* Set type: a plain numbered set, or a lettered one (warm-up, drop set, left/right).
+              Warm-ups and drop sets don't count towards progression or the trend charts. */}
+          {mode === 'reps' && <>
+            <div className="pop-title">{t('Set type')}</div>
+            <div className="ktypes">
+              <button className={'ktype' + (!s.k ? ' on' : '')} onClick={() => onField(i, 'k', null)}><b>{setBadge(entry.sets.map((x, j) => (j === i ? { ...x, k: undefined } : x)), i)}</b>{t('Normal')}</button>
+              {SET_KINDS.map(k => <button key={k} className={'ktype k-' + k + (s.k === k ? ' on' : '')} onClick={() => onField(i, 'k', k)}><b>{t(KIND_LETTER[k])}</b>{t(KIND_NAME[k])}</button>)}
+            </div>
+          </>}
+          <div className="pop-title" style={mode === 'reps' ? { marginTop: 12 } : undefined}>{t('Rest after this set')}</div>
           <Stepper value={s.restSec || 0} step={5} decimal={false} onChange={v => onField(i, 'restSec', v || null)} />
           <div className="small dim" style={{ marginTop: 8 }}>
             {s.restSec > 0
@@ -293,7 +303,11 @@ function ActiveWorkout() {
     const m = modeOf({ ...(e.target || {}), id: e.id })
     if (m === 'cardio') e.sets.push({ min: l ? l.min : (e.target.min || 20), speed: l ? l.speed : (e.target.speed || 8), done: false })
     else if (m === 'time') e.sets.push({ sec: l ? l.sec : (e.target.sec || 45), w: l ? (l.w || 0) : (e.target.weight || 0), done: false })
-    else e.sets.push({ w: l ? l.w : 0, r: l ? l.r : e.target.reps, done: false })
+    // A new set is a plain working set, copied from the last working one (not a drop set).
+    else {
+      const lw = [...e.sets].reverse().find(isWorking) || l
+      e.sets.push({ w: lw ? lw.w : 0, r: lw ? lw.r : e.target.reps, done: false })
+    }
   })
   const removeSet = idx => mutEntry(idx, e => { if (e.sets.length > 1) e.sets.pop() })
 

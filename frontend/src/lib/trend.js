@@ -9,8 +9,10 @@
 //     count is not refused past 12 — here only the direction matters, not the absolute value.
 //   · bodyweight reps → most reps in one set
 //   · timed holds     → longest hold in seconds
+// Warm-ups and drop sets are left out — they are lighter by design and say nothing about
+// whether the working sets moved.
 // Cardio has no single "better" direction worth charting and is left out.
-import { modeOf } from './history.js'
+import { modeOf, isWorking } from './history.js'
 
 // Reps beyond this add nothing to the estimate — a set of 50 is endurance, not strength.
 const EPLEY_CAP = 30
@@ -28,14 +30,14 @@ export function metricOf(entry) {
   const mode = modeOf(cfg)
   if (mode === 'cardio') return null
   if (mode === 'time') return 'sec'
-  const loaded = (entry.sets || []).some(s => s.done && s.w > 0)
+  const loaded = (entry.sets || []).some(s => s.done && isWorking(s) && s.w > 0)
   // No load on any set: bodyweight work, or a lift logged without a weight — reps is all there is.
   return loaded ? 'e1rm' : 'reps'
 }
 
 // The session's score under `metric`, or null when nothing counted towards it.
 export function scoreOf(entry, metric) {
-  const done = (entry.sets || []).filter(s => s.done)
+  const done = (entry.sets || []).filter(s => s.done && isWorking(s))
   let best = null
   done.forEach(s => {
     let v = null
@@ -79,4 +81,39 @@ export function exerciseTrend(S, exId, upto, limit = 10) {
   const delta = base > 0 ? (last.y - base) / base : 0
   const verdict = delta > STEADY ? 'up' : delta < -STEADY ? 'down' : 'steady'
   return { metric, points: shown, delta, verdict }
+}
+
+// The whole session against earlier sessions of the same routine — the chart on the finish
+// screen. One number per session: the volume of its working sets (weight × reps), or the total
+// reps when the routine carries no load at all. Volume is the honest "how much work did this
+// session do" figure for a routine whose exercises use different units and rep ranges.
+export function sessionScore(w, metric) {
+  let v = 0
+  w.entries.forEach(e => e.sets.forEach(s => {
+    if (!s.done || !isWorking(s)) return
+    v += metric === 'vol' ? (s.w || 0) * (s.r || 0) : (s.r || 0)
+  }))
+  return round1(v)
+}
+export function routineTrend(S, upto, limit = 10) {
+  const ws = S.workouts || []
+  const end = ws.findIndex(w => w.id === upto)
+  const cur = ws[end]
+  if (!cur || !cur.routineId) return { metric: null, points: [], delta: 0, verdict: 'first' }
+  const metric = sessionScore(cur, 'vol') > 0 ? 'vol' : 'reps'
+  const points = ws.slice(0, end + 1).filter(w => w.routineId === cur.routineId)
+    .map(w => ({ t: w.start || new Date(w.d + 'T12:00:00').getTime(), d: w.d, y: sessionScore(w, metric), id: w.id }))
+    .filter(p => p.y > 0)
+  const shown = points.slice(-limit)
+  if (points.length < 2 || points[points.length - 1].id !== cur.id) return { metric, points: shown, delta: 0, verdict: 'first' }
+  const before = points.slice(0, -1).slice(-BASELINE)
+  const base = before.reduce((a, p) => a + p.y, 0) / before.length
+  const delta = base > 0 ? (points[points.length - 1].y - base) / base : 0
+  return { metric, points: shown, delta, verdict: delta > STEADY ? 'up' : delta < -STEADY ? 'down' : 'steady' }
+}
+// How many of the session's exercises went up / down against their own history.
+export function exerciseVerdicts(S, w) {
+  const out = { up: 0, down: 0, steady: 0 }
+  w.entries.forEach(e => { const v = exerciseTrend(S, e.id, w.id).verdict; if (out[v] != null) out[v]++ })
+  return out
 }

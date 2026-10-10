@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { mondayOf, weeksBetween, programFor, weekFor, syncWeek, unschedule, rotationInfo } from './programs.js'
+import { mondayOf, weeksBetween, programFor, weekFor, syncWeek, unschedule, rotationInfo, ensureGroups, isExpired } from './programs.js'
+import { todayISO } from './format.js'
 
 const A = { id: 'a', name: 'A', week: { 1: 'push' } }
 const B = { id: 'b', name: 'B', week: { 2: 'pull' } }
@@ -46,5 +47,34 @@ describe('programs', () => {
     expect([r.cur.id, r.next.id, r.inWeeks]).toEqual(['a', 'b', 2])
     expect(rotationInfo(base({ rotate: 2 }), '2026-09-30').inWeeks).toBe(1)
     expect(rotationInfo(base(), '2026-09-24').next).toBe(null)
+  })
+  it('hands over to the next running group after an end date', () => {
+    const S = base({ programs: [{ ...A, until: '2026-09-30' }, B, C] })
+    expect(programFor(S, '2026-09-30').id).toBe('a')
+    expect(programFor(S, '2026-10-01').id).toBe('b')
+    expect(isExpired(S.programs[0], '2026-10-01')).toBe(true)
+  })
+  it('schedules nothing once every group has ended', () => {
+    const S = base({ programs: [{ ...A, until: '2026-09-30' }] })
+    expect(weekFor(S, '2026-10-05')).toEqual({})
+  })
+  it('creates a first group and files loose routines into it', () => {
+    const S = { week: { 1: 'r1' }, dayPlan: {}, routines: [{ id: 'r1', ex: [] }, { id: 'r2', ex: [] }] }
+    ensureGroups(S)
+    expect(S.programs).toHaveLength(1)
+    expect(S.programs[0].week).toEqual({ 1: 'r1' })
+    expect(S.routines.map(r => r.group)).toEqual([S.programs[0].id, S.programs[0].id])
+  })
+  it('files a routine into the group that schedules it', () => {
+    const S = { ...base(), dayPlan: {}, routines: [{ id: 'pull', ex: [] }, { id: 'x', ex: [] }] }
+    ensureGroups(S)
+    expect(S.routines.map(r => r.group)).toEqual(['b', 'a'])
+  })
+  it('drops temporary routines once their day has passed', () => {
+    const S = { ...base(), dayPlan: { '2020-01-01': 't1' }, routines: [{ id: 't1', temp: '2020-01-01', ex: [] }, { id: 't2', temp: todayISO(), ex: [] }] }
+    ensureGroups(S)
+    expect(S.routines.map(r => r.id)).toEqual(['t2'])
+    expect(S.dayPlan).toEqual({})
+    expect(S.routines[0].group).toBeUndefined()
   })
 })
