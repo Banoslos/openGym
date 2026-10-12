@@ -706,4 +706,12 @@ export default {
   'R': 'DX',
   'Workout details & progress': 'Dettagli e progressi',
   'Not every set at {0} {1} last time — {0} {1} in every set this time.': 'L\'ultima volta non tutte le serie a {0} {1} — stavolta {0} {1} in ogni serie.',
+  // ---- routine editor, lock-screen workout ----
+  'Remove exercise?': 'Rimuovere l\'esercizio?',
+  '“{0}” will be removed from this routine.': '“{0}” verrà rimosso da questa scheda.',
+  'Drag to reorder': 'Trascina per riordinare',
+  'Drag an exercise by its handle to reorder it. Tap the link button to superset it with the one above — you’ll do them back-to-back.': 'Trascina un esercizio dalla maniglia per cambiarne l\'ordine. Tocca il pulsante collegamento per farlo in superserie con quello sopra — li farai uno dopo l\'altro.',
+  'Set {0} of {1}': 'Serie {0} di {1}',
+  'All sets done': 'Tutte le serie fatte',
+  'Hold': 'Tenuta',
 }
