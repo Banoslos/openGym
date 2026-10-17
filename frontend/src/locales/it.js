@@ -714,4 +714,6 @@ export default {
   'Set {0} of {1}': 'Serie {0} di {1}',
   'All sets done': 'Tutte le serie fatte',
   'Hold': 'Tenuta',
+  'Set types': 'Tipi di serie',
+  'Tap a set to switch it between both sides, left and right; tap a warm-up or drop set to remove it.': 'Tocca una serie per passare da normale a sinistra e destra; tocca un riscaldamento o uno stripping per toglierlo.',
 }

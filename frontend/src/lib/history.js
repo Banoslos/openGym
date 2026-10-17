@@ -104,6 +104,28 @@ export const SET_KINDS = ['w', 'd', 'l', 'r']
 export const KIND_LETTER = { w: 'W', d: 'D', l: 'L', r: 'R' }
 export const KIND_NAME = { w: 'Warm-up', d: 'Drop set', l: 'Left', r: 'Right' }
 export const isWorking = s => !s || !s.k || s.k === 'l' || s.k === 'r'
+const workKind = k => !k || k === 'l' || k === 'r'
+// A planned set layout (one kind per set, '' for a plain set) with exactly `n` working sets.
+// Missing plain sets go in after the last working set, ahead of a trailing drop set; extra
+// ones come off the end, plain sets first, so the warm-up and the drop set stay where they are.
+// `trim` false only ever adds — last time's layout is topped up to the plan, never cut.
+export function fitLayout(layout, n, trim = true) {
+  const out = [...(layout || [])]
+  while (out.filter(workKind).length < n) {
+    let at = out.length
+    while (at > 0 && !workKind(out[at - 1])) at--
+    out.splice(at > 0 ? at : out.length, 0, '')
+  }
+  while (trim && out.filter(workKind).length > n) {
+    const plain = out.lastIndexOf('')
+    let j = out.length - 1
+    while (j >= 0 && !workKind(out[j])) j--
+    out.splice(plain >= 0 ? plain : j, 1)
+  }
+  return out
+}
+// The badges of a layout, as the workout will show them: "W 1 2 3 D".
+export const layoutBadges = layout => layout.map((k, i) => setBadge(layout.map(x => (x ? { k: x } : {})), i))
 // The badge on a set: its number among the plain sets, or its type letter.
 export function setBadge(sets, i) {
   const s = sets[i]
@@ -164,7 +186,8 @@ export function exLine(cfg, unit) {
   if (mode === 'time') return `${n} × ${fmtSec(cfg.sec || 45)}${load}`
   // This is the line with room for it, so the split is spelled out: "3 × 16 · 8/side".
   const split = isPerSide(cfg) && !toFailure(cfg) ? ' · ' + t('{0}/side', fmtNum(sideReps(cfg.reps))) : ''
-  return `${n} × ${repsText(cfg.reps)}${load}${split}`
+  const types = cfg.layout && cfg.layout.some(Boolean) ? ' · ' + layoutBadges(fitLayout(cfg.layout, n)).join(' ') : ''
+  return `${n} × ${repsText(cfg.reps)}${load}${split}${types}`
 }
 
 // Drop superset ids that no longer have an adjacent partner (after unlink/reorder/remove).
@@ -233,14 +256,10 @@ export function buildSets(S, cfg) {
   // Last time's layout is kept when it used set types — the warm-up, the drop set at the end,
   // the left/right pairs — so a structure you built once comes back by itself. Plain sets are
   // topped up to the plan's count, never trimmed.
-  const layout = last && last.sets.some(s => s.k) ? last.sets.map(s => s.k || '') : []
-  // Missing plain sets go in after the last working set, ahead of a trailing drop set.
-  const work = k => !k || k === 'l' || k === 'r'
-  while (layout.filter(work).length < n) {
-    let at = layout.length
-    while (at > 0 && !work(layout[at - 1])) at--
-    layout.splice(at > 0 ? at : layout.length, 0, '')
-  }
+  // A layout planned in the routine wins: that is the structure you asked for.
+  const planned = cfg.layout && cfg.layout.some(Boolean) ? cfg.layout : null
+  const layout = planned ? fitLayout(planned, n)
+    : fitLayout(last && last.sets.some(s => s.k) ? last.sets.map(s => s.k || '') : [], n, false)
   const conf = S.exWeights[cfg.id]
   const seen = {}
   layout.forEach(k => {
@@ -254,7 +273,10 @@ export function buildSets(S, cfg) {
     // lighter instead of everything jumping to your all-time best. Reps: the routine's target
     // (that is the number to reach); a set to failure or a warm-up/drop set has none, so
     // last time's count is the starting point there.
-    const w = usable ? usable.w : (conf && conf.w > 0 ? conf.w : cfg.weight)
+    let w = usable ? usable.w : (conf && conf.w > 0 ? conf.w : cfg.weight)
+    // A warm-up or drop set never done before starts from a share of the working weight
+    // (half, and 70 %), rounded to a loadable 2.5, rather than at the full working load.
+    if (!same && (k === 'w' || k === 'd') && w > 0) w = Math.max(0, Math.round(w * (k === 'w' ? 0.5 : 0.7) / 2.5) * 2.5)
     const ownTarget = !k || k === 'l' || k === 'r'
     const r = ownTarget && cfg.reps > 0 ? cfg.reps : (usable ? usable.r : cfg.reps)
     sets.push({ w, r, done: false, ...(k ? { k } : {}) })

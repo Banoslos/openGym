@@ -4,7 +4,7 @@ import { useUI } from './store/useUI.js'
 import { EXDB, EXIDX, BODYPARTS, isCardio, isBodyweightEq, allExercises, equipmentOf, queryWords, matchesQuery, byNameHit } from './lib/exercises.js'
 import { fmtDate, fmtNum, fmtVol, fmtDur, durPart, todayISO, uid, exCount, DAYN, MONTHS_LONG, ACCENTS } from './lib/format.js'
 import { weekFor, editableWeek, groupRoutines, listedRoutines, programFor } from './lib/programs.js'
-import { lastEntryFor, bestWeightFor, buildSets, effectiveRoutineId, workoutVolume, setsDone, setsDoneActive, lastBW, supersetUnits, unitOf, setLabel, setText, isWorking, defaultConfig, cleanupSg, modeOf, effortOf, isBw, isPerSide, sideReps } from './lib/history.js'
+import { lastEntryFor, bestWeightFor, buildSets, effectiveRoutineId, workoutVolume, setsDone, setsDoneActive, lastBW, supersetUnits, unitOf, setLabel, setText, isWorking, defaultConfig, cleanupSg, modeOf, effortOf, isBw, isPerSide, sideReps, fitLayout, layoutBadges, KIND_NAME } from './lib/history.js'
 import { beep, vibrate } from './lib/sound.js'
 import { t, instrFor, getLang, INSTR_LANGS } from './lib/i18n.js'
 import { nav } from './lib/nav.js'
@@ -491,6 +491,35 @@ function ProgressionFields({ ex, mode, c, setC, routine, unit }) {
   </>
 }
 
+// The planned set types of a routine exercise: the same lettered sets the workout offers
+// (warm-up, drop set, left/right), chosen once here so every session starts with them.
+// "Sets" stays the count of working sets; a warm-up or drop set comes on top of it.
+function SetLayout({ c, setC }) {
+  const n = Math.max(1, Math.round(c.sets) || 1)
+  const layout = fitLayout(c.layout || [], n)
+  const set = next => setC(x => ({ ...x, layout: next.some(Boolean) ? next : undefined }))
+  // A working set cycles plain → left → right; a warm-up or drop set is removed by a tap.
+  const tap = i => {
+    const k = layout[i]
+    if (k === 'w' || k === 'd') return set(layout.filter((_, j) => j !== i))
+    set(layout.map((x, j) => (j === i ? (!x ? 'l' : x === 'l' ? 'r' : '') : x)))
+  }
+  const badges = layoutBadges(layout)
+  return <>
+    <h4 className="sec">{t('Set types')}</h4>
+    <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+      {layout.map((k, i) => <button key={i} className={'ktype' + (k ? ' k-' + k : '')} style={{ padding: 4 }}
+        aria-label={k ? t(KIND_NAME[k]) : t('Normal')} onClick={() => tap(i)}><b>{badges[i]}</b></button>)}
+    </div>
+    <div className="row" style={{ gap: 6, marginBottom: 8 }}>
+      <Button variant="tinted" size="sm" icon="plus" onClick={() => set(['w', ...layout])}>{t('Warm-up')}</Button>
+      <Button variant="tinted" size="sm" icon="plus" onClick={() => set([...layout, 'd'])}>{t('Drop set')}</Button>
+    </div>
+    <div className="small dim" style={{ marginBottom: 18 }}>
+      {t('Tap a set to switch it between both sides, left and right; tap a warm-up or drop set to remove it.')}
+    </div>
+  </>
+}
 function ExConfig({ ex, existing, onSave: onSaveRaw, onDelete, close, routine }) {
   const st = useStore(s => s.S)
   const cardio = isCardio(ex.id)
@@ -535,6 +564,8 @@ function ExConfig({ ex, existing, onSave: onSaveRaw, onDelete, close, routine })
       const typed = c.reps === 0 ? 0 : Math.max(1, Math.round(c.reps) || 10)
       const reps = perSide ? Math.ceil(typed / 2) * 2 : typed
       const out = { sets, mode: 'reps', reps, weight: Math.max(0, c.weight || 0), ...flags, ...(perSide ? { side: true } : {}), ...prog, ...extra }
+      // The set types are written only when one of them is set, so a plain routine keeps its shape.
+      if (c.layout && c.layout.some(Boolean)) out.layout = fitLayout(c.layout, sets)
       if (reps > 0 && policyFor({ ...c, id: ex.id }, routine, 'reps') === 'double') out.repsMin = Math.min(reps, Math.max(1, Math.round(c.repsMin) || Math.max(1, reps - 2)))
       // A ceiling below the working reps would tell you to add a set on day one.
       if (reps > 0 && ((bw && !(out.weight > 0)) || policyFor({ ...c, id: ex.id }, routine, 'reps') === 'reps') && c.repsMax > 0) out.repsMax = Math.max(reps, Math.round(c.repsMax))
@@ -563,7 +594,7 @@ function ExConfig({ ex, existing, onSave: onSaveRaw, onDelete, close, routine })
         <Stepper label={t('Seconds')} value={c.sec} step={5} decimal={false} onChange={v => setC(x => ({ ...x, sec: v }))} />
         <Stepper label={t('Weight ({0})', st.unit)} value={c.weight} step={2.5} onChange={v => setC(x => ({ ...x, weight: v }))} />
       </> : <>
-        <Stepper label={t('Sets')} value={c.sets} step={1} decimal={false} onChange={v => setC(x => ({ ...x, sets: v }))} />
+        <Stepper label={t('Sets')} value={c.sets} step={1} decimal={false} onChange={v => setC(x => ({ ...x, sets: v, ...(x.layout ? { layout: fitLayout(x.layout, Math.max(1, Math.round(v) || 1)) } : {}) }))} />
         <Stepper label={t('Reps')} value={c.reps} step={perSide ? 2 : 1} decimal={false} zeroLabel={t('Failure')} onChange={v => setC(x => ({ ...x, reps: v }))} />
         {/* On bodyweight work the weight stepper is the click #32 is about, so it is not here
             until there is a belt to describe — see the added-weight row below. */}
@@ -573,6 +604,7 @@ function ExConfig({ ex, existing, onSave: onSaveRaw, onDelete, close, routine })
     {mode === 'reps' && c.reps === 0 && <div className="small dim" style={{ marginTop: -10, marginBottom: 18 }}>
       {t('Every set to failure — log the reps you actually got during the workout.')}
     </div>}
+    {mode === 'reps' && <SetLayout c={c} setC={setC} />}
     {mode === 'time' && !bw && <div className="small dim" style={{ marginBottom: 18 }}>
       {t('A timer runs while you hold the set. Leave the weight at 0 for bodyweight holds.')}
     </div>}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { modeOf, isTimed, fmtSec, setLabel, defaultConfig, buildSets, exLine, workoutVolume, effortOf, stepEffort, capEffort, isBw, isPerSide, sideReps, repStep } from './history.js'
+import { fitLayout, modeOf, isTimed, fmtSec, setLabel, defaultConfig, buildSets, exLine, workoutVolume, effortOf, stepEffort, capEffort, isBw, isPerSide, sideReps, repStep } from './history.js'
 import { EXDB } from './exercises.js'
 
 // Real ids out of the shipped catalogue, so the body-part fallback is exercised for real.
@@ -336,7 +336,20 @@ describe('exLine', () => {
 
 const emptyS = { workouts: [], exWeights: {} }
 
+describe('fitLayout', () => {
+  it('adds plain sets before a trailing drop set and trims plain sets first', () => {
+    expect(fitLayout(['w', '', 'd'], 3)).toEqual(['w', '', '', '', 'd'])
+    expect(fitLayout(['w', 'l', 'r', '', 'd'], 2)).toEqual(['w', 'l', 'r', 'd'])
+    expect(fitLayout([], 2)).toEqual(['', ''])
+  })
+})
+
 describe('buildSets', () => {
+  it('follows the set types planned in the routine', () => {
+    expect(buildSets(emptyS, { id: LIFT, sets: 2, reps: 8, weight: 60, layout: ['w', '', '', 'd'] }))
+      .toEqual([{ w: 30, r: 8, done: false, k: 'w' }, { w: 60, r: 8, done: false }, { w: 60, r: 8, done: false }, { w: 42.5, r: 8, done: false, k: 'd' }])
+  })
+
   it('builds reps sets from the plan when there is no history', () => {
     expect(buildSets(emptyS, { id: LIFT, sets: 3, reps: 8, weight: 50 }))
       .toEqual([{ w: 50, r: 8, done: false }, { w: 50, r: 8, done: false }, { w: 50, r: 8, done: false }])
